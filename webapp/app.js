@@ -8,6 +8,7 @@ const NAV = {
   home:   { label: "Сегодня", icon: "ti-home-2" },
   day:    { label: "День",    icon: "ti-calendar" },
   tasks:  { label: "Задачи",  icon: "ti-circle-check" },
+  journal:{ label: "Дневник", icon: "ti-notebook" },
   money:  { label: "Финансы", icon: "ti-wallet" },
   funnel: { label: "Воронка", icon: "ti-target" },
   more:   { label: "Ещё",     icon: "ti-dots" }
@@ -103,6 +104,9 @@ const RENDER = {
 
   async day() {
     const dd = await API.day(curDay);
+    window.__dayItems = dd.items || [];
+    const mk = await API.month(viewYM);
+    const marks = new Set(mk.dates || []);
     const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
     const [Y, M] = viewYM.split("-").map(Number);
     const startW = (new Date(Y, M - 1, 1).getDay() + 6) % 7;
@@ -112,7 +116,7 @@ const RENDER = {
     for (let i = 0; i < startW; i++) cells += "<div></div>";
     for (let d = 1; d <= dim; d++) {
       const iso = `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')">${d}</button>`;
+      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')"><span>${d}</span>${marks.has(iso) ? '<span class="cal-dot"></span>' : ''}</button>`;
     }
     el("s-day").innerHTML = `
       <div class="row spread" style="margin:8px 0 10px">
@@ -124,7 +128,7 @@ const RENDER = {
       <div class="cal">${cells}</div>
       <div class="row spread" style="margin:16px 0 8px"><div style="font-weight:600">${dayLabel(curDay)}</div><button onclick="openCreate({type:'block', date: curDay})" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ в сетку</button></div>
       <div class="card" style="padding:6px 16px">
-        ${dd.items && dd.items.length ? dd.items.map((it) => `<div class="li"><span class="tcell">${it.start}</span><i class="ti ${ic(it.kind)}" style="color:var(--muted)"></i><span class="t" style="font-weight:500">${it.text}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
+        ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li" style="cursor:pointer" onclick="editItem(${i})"><span class="tcell">${it.start}</span><i class="ti ${ic(it.kind)}" style="color:var(--muted)"></i><span class="t" style="font-weight:500">${it.text}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
       ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}`;
   },
@@ -148,7 +152,7 @@ const RENDER = {
         </div>` : `
         <div class="li">
           <span class="chk" onclick="closeTask('${t.id}')"><i class="ti ti-check" style="font-size:15px"></i></span>
-          <div class="t"><div>${t.text}</div><div class="m">${t.company}${t.due ? " · " + t.due : ""}</div></div>
+          <div class="t" onclick="editTask('${t.id}')" style="cursor:pointer"><div>${t.text}</div><div class="m">${t.company}${t.due ? " · " + t.due : ""} · нажми, чтобы изменить</div></div>
         </div>`).join("") : `<div class="lbl" style="padding:14px 0">${filter === "done" ? "Выполненных пока нет" : "Задач нет 🎉"}</div>`;
     };
     draw();
@@ -205,6 +209,7 @@ const RENDER = {
       <h1 class="h">Ещё</h1>
       <div class="card" style="padding:6px 16px">
         <div class="li" onclick="enablePush()"><i class="ti ti-bell-ringing" style="font-size:20px;color:var(--red)"></i><div class="t">Уведомления</div><span class="lbl" id="pushState">включить</span></div>
+        <div class="li" onclick="show('journal')"><i class="ti ti-notebook" style="font-size:20px;color:var(--red)"></i><div class="t">Дневник / заметки</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
         ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         ${admin ? `<div class="li"><i class="ti ti-users" style="font-size:20px;color:var(--red)"></i><div class="t">Роли и доступ</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
@@ -243,10 +248,10 @@ function openCreate(pre) {
   el("create").innerHTML = `
     <div class="sheet">
       <h3>Создать</h3>
-      <div class="seg" id="ctype">
-        <b data-t="task">Задача</b><b data-t="rem">Напоминание</b><b data-t="block">В сетку</b>
+      <div class="seg" id="ctype" style="font-size:11px">
+        <b data-t="task">Задача</b><b data-t="rem">Напом.</b><b data-t="block">В сетку</b><b data-t="note">Заметка</b>
       </div>
-      <input id="ctext" placeholder="Что нужно сделать…" value="${(pre.text || '').replace(/"/g, '&quot;')}">
+      <input id="ctext" placeholder="Текст…" value="${(pre.text || '').replace(/"/g, '&quot;')}">
       <div id="cdate-wrap" style="display:flex;gap:8px;margin-top:10px">
         <input type="date" id="cdate" value="${date}" style="flex:1">
         <input type="time" id="ctime" value="${pre.start || '10:00'}" style="width:108px">
@@ -263,7 +268,7 @@ function openCreate(pre) {
   applyCreateType(type);
 }
 function applyCreateType(t) {
-  el("cdate-wrap").style.display = (t === "task") ? "none" : "flex";
+  el("cdate-wrap").style.display = (t === "task" || t === "note") ? "none" : "flex";
   el("cend").style.display = (t === "block") ? "" : "none";
 }
 function curType() { const b = document.querySelector("#ctype b.on"); return b ? b.dataset.t : "task"; }
@@ -274,6 +279,7 @@ async function saveCreate() {
   const t = curType(); toast("Сохраняю…");
   let r;
   if (t === "task") r = await API.addTask(text);
+  else if (t === "note") r = await API.addNote(text);
   else if (t === "rem") r = await API.addReminder(el("cdate").value, el("ctime").value, text);
   else r = await API.addBlock(el("cdate").value, el("ctime").value, el("cend").value, text);
   closeCreate();
@@ -293,6 +299,81 @@ async function dedupTasks() {
   const r = await API.dedup();
   toast(r && r.ok ? (r.removed ? `Убрано дублей: ${r.removed}` : "Дублей не найдено") : "Не удалось");
   if (RENDER.tasks) RENDER.tasks();
+}
+
+/* ---- редактирование текста задачи ---- */
+function editTask(id) {
+  const t = (window.__tasks || []).find((x) => x.id === id);
+  if (!t) return;
+  el("create").innerHTML = `
+    <div class="sheet">
+      <h3>Изменить задачу</h3>
+      <input id="etext" value="${t.text.replace(/"/g, '&quot;')}" style="margin-bottom:4px">
+      <button class="btn red" style="margin-top:14px" onclick="saveTaskEdit('${id}')">Сохранить</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
+    </div>`;
+  el("create").classList.remove("hidden");
+  setTimeout(() => { const i = el("etext"); if (i) i.focus(); }, 50);
+}
+async function saveTaskEdit(id) {
+  const t = (window.__tasks || []).find((x) => x.id === id); if (!t) return;
+  const nw = (el("etext").value || "").trim(); if (!nw) { toast("Текст пустой"); return; }
+  toast("Сохраняю…");
+  const r = await API.taskEdit(t.text, nw);
+  closeCreate(); toast(r && r.ok !== false ? "Изменено ✓" : "Не удалось"); RENDER.tasks();
+}
+
+/* ---- редактирование элемента сетки (перенос/удаление) ---- */
+function editItem(idx) {
+  const it = (window.__dayItems || [])[idx];
+  if (!it) return;
+  el("create").innerHTML = `
+    <div class="sheet">
+      <h3>Изменить</h3>
+      <div class="lbl" style="margin-bottom:12px">${it.text}</div>
+      <div style="display:flex;gap:8px">
+        <input type="date" id="edate" value="${curDay}" style="flex:1">
+        <input type="time" id="estart" value="${it.start}" style="width:108px">
+        ${it.kind === "block" ? `<input type="time" id="eend" value="${it.end || ''}" style="width:108px">` : ""}
+      </div>
+      <button class="btn red" style="margin-top:14px" onclick="saveEdit(${idx})">Сохранить</button>
+      <button class="btn ghost" style="margin-top:8px;color:#c0392b;border-color:#e3b3b3" onclick="deleteItem(${idx})">Удалить</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
+    </div>`;
+  el("create").classList.remove("hidden");
+}
+async function saveEdit(idx) {
+  const it = (window.__dayItems || [])[idx]; if (!it) return;
+  toast("Сохраняю…");
+  const r = await API.itemMove({ kind: it.kind, date: curDay, start: it.start, text: it.text,
+    new_date: el("edate").value, new_start: el("estart").value, new_end: (it.kind === "block" && el("eend")) ? el("eend").value : "" });
+  closeCreate(); toast(r && r.ok !== false ? "Перенесено ✓" : "Не удалось"); RENDER.day();
+}
+async function deleteItem(idx) {
+  const it = (window.__dayItems || [])[idx]; if (!it) return;
+  toast("Удаляю…");
+  const r = await API.itemDelete({ kind: it.kind, date: curDay, start: it.start, text: it.text });
+  closeCreate(); toast(r && r.ok !== false ? "Удалено ✓" : "Не удалось"); RENDER.day();
+}
+
+/* ---- дневник ---- */
+RENDER.journal = async function () {
+  const j = await API.journal(60);
+  el("s-journal").innerHTML = `
+    <h1 class="h" style="margin:8px 0 14px">Дневник</h1>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input id="jtext" placeholder="Записать мысль / как прошёл день…" style="flex:1">
+      <button class="btn red" style="width:auto;padding:0 18px" onclick="addJournal()">＋</button>
+    </div>
+    <div class="card" style="padding:4px 16px">
+      ${j.entries && j.entries.length ? j.entries.map((e) => `<div style="padding:11px 0;border-bottom:1px solid var(--line)"><div style="font-size:14px">${e.text}</div><div class="lbl" style="font-size:11px;margin-top:3px">${e.ts}</div></div>`).join("") : `<div class="lbl" style="padding:14px 0">Записей пока нет. Пиши сюда заметки и как прошёл день.</div>`}
+    </div>`;
+};
+async function addJournal() {
+  const t = (el("jtext").value || "").trim(); if (!t) return;
+  toast("Записываю…");
+  await API.addNote(t);
+  toast("Записал ✓"); RENDER.journal();
 }
 
 /* ---- пуш-уведомления ---- */

@@ -59,9 +59,9 @@ def send_push(sub, payload):
             vapid_private_key=_VAPID_PEM, vapid_claims={"sub": VAPID_SUB})
 
 ROLE_SECTIONS = {
-    "owner": ["home", "day", "tasks", "money", "funnel", "more"],
-    "head":  ["home", "day", "tasks", "money", "funnel", "more"],
-    "staff": ["home", "day", "tasks", "more"],
+    "owner": ["home", "day", "tasks", "journal", "money", "funnel", "more"],
+    "head":  ["home", "day", "tasks", "journal", "money", "funnel", "more"],
+    "staff": ["home", "day", "tasks", "journal", "more"],
 }
 DEFAULT_PINS = {
     "1111": {"id": "ivan",  "name": "Иван Кузин",         "role": "owner", "companies": "*",          "title": "Владелец"},
@@ -261,6 +261,38 @@ def task_done(b: Done):
     return {"ok": gh_write("state/tasks.md", md2, "app: закрыта задача — " + target[:40])}
 
 
+class EditTask(BaseModel):
+    old_text: str
+    new_text: str
+
+
+@app.post("/api/tasks/edit")
+def task_edit(b: EditTask):
+    md = gh_read("state/tasks.md") or ""
+    target = (b.old_text or "").strip()
+    new = (b.new_text or "").strip()
+    if not target or not new or "## Активные" not in md:
+        return {"ok": False}
+    out, edited, in_active = [], False, False
+    for l in md.splitlines():
+        st = l.strip()
+        if st.startswith("## "):
+            in_active = (st == "## Активные")
+        if in_active and not edited and st.startswith("- ") and (target in _clean_task(l) or _clean_task(l) in target):
+            pr = next((e for e in ("🔴", "🟡", "🟢") if e in l), "🟡")
+            mc = re.search(r"\[([^\]]+)\]", l)
+            mt = re.search(r"_\([^)]*\)_", l)
+            comp = mc.group(1) if mc else "Личное"
+            tail = (" " + mt.group(0)) if mt else ""
+            out.append(f"- {pr} [{comp}] {new}{tail}")
+            edited = True
+            continue
+        out.append(l)
+    if not edited:
+        return {"ok": False, "reason": "not found"}
+    return {"ok": gh_write("state/tasks.md", "\n".join(out), "app: правка задачи")}
+
+
 class Touch(BaseModel):
     name: str
 
@@ -430,6 +462,100 @@ def agenda_add(b: AddBlock):
     ag = load_json("state/agenda.json", [])
     ag.append({"date": b.date, "start": b.start, "end": (b.end or None), "text": b.text.strip()})
     return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок в сетку")}
+
+
+@app.get("/api/month")
+def month(ym: str = ""):
+    ym = ym or dt.date.today().isoformat()[:7]
+    dates = set()
+    for a in load_json("state/agenda.json", []):
+        if a.get("start") and str(a.get("date", ""))[:7] == ym:
+            dates.add(a["date"])
+    for r in load_json("state/reminders.json", []):
+        if r.get("done"):
+            continue
+        w = r.get("when", "")
+        if len(w) >= 10 and w[:7] == ym:
+            dates.add(w[:10])
+    return {"dates": sorted(dates)}
+
+
+class Note(BaseModel):
+    text: str
+
+
+@app.post("/api/note/add")
+def note_add(b: Note):
+    j = gh_read("state/journal.md") or "# Дневник\n"
+    stamp = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).strftime("%Y-%m-%d %H:%M")
+    j = j.rstrip() + f"\n- {stamp} · {b.text.strip()}\n"
+    return {"ok": gh_write("state/journal.md", j, "app: заметка")}
+
+
+class ItemMove(BaseModel):
+    kind: str            # "block" | "rem"
+    date: str
+    start: str
+    text: str
+    new_date: str
+    new_start: str
+    new_end: str = ""
+
+
+@app.post("/api/item/move")
+def item_move(b: ItemMove):
+    if b.kind == "block":
+        ag = load_json("state/agenda.json", [])
+        for a in ag:
+            if a.get("date") == b.date and a.get("start") == b.start and a.get("text", "") == b.text:
+                a["date"] = b.new_date
+                a["start"] = b.new_start
+                a["end"] = b.new_end or None
+                return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: перенос блока")}
+        return {"ok": False, "reason": "not found"}
+    else:
+        rems = load_json("state/reminders.json", [])
+        for r in rems:
+            w = r.get("when", "")
+            if w[:10] == b.date and w[11:16] == b.start and r.get("text", "") == b.text:
+                r["when"] = f"{b.new_date}T{b.new_start}"
+                return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: перенос напоминания")}
+        return {"ok": False, "reason": "not found"}
+
+
+class ItemDel(BaseModel):
+    kind: str
+    date: str
+    start: str
+    text: str
+
+
+@app.post("/api/item/delete")
+def item_delete(b: ItemDel):
+    if b.kind == "block":
+        ag = load_json("state/agenda.json", [])
+        new = [a for a in ag if not (a.get("date") == b.date and a.get("start") == b.start and a.get("text", "") == b.text)]
+        if len(new) == len(ag):
+            return {"ok": False, "reason": "not found"}
+        return {"ok": gh_write("state/agenda.json", json.dumps(new, ensure_ascii=False, indent=2), "app: удалён блок")}
+    else:
+        rems = load_json("state/reminders.json", [])
+        new = [r for r in rems if not (r.get("when", "")[:10] == b.date and r.get("when", "")[11:16] == b.start and r.get("text", "") == b.text)]
+        if len(new) == len(rems):
+            return {"ok": False, "reason": "not found"}
+        return {"ok": gh_write("state/reminders.json", json.dumps(new, ensure_ascii=False, indent=2), "app: удалено напоминание")}
+
+
+@app.get("/api/journal")
+def journal(limit: int = 50):
+    j = gh_read("state/journal.md") or ""
+    entries = []
+    for ln in j.splitlines():
+        m = re.match(r"^- (.+?) · (.+)$", ln.strip())
+        if m:
+            entries.append({"ts": m.group(1), "text": m.group(2)})
+    entries.reverse()
+    return {"entries": entries[:limit]}
 
 
 @app.get("/api/day")

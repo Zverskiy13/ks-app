@@ -14,9 +14,9 @@ const USERS = {
 };
 
 const ROLE_SECTIONS = {
-  owner: ["home", "day", "tasks", "money", "funnel", "more"],
-  head:  ["home", "day", "tasks", "money", "funnel", "more"],
-  staff: ["home", "day", "tasks", "more"]
+  owner: ["home", "day", "tasks", "journal", "money", "funnel", "more"],
+  head:  ["home", "day", "tasks", "journal", "money", "funnel", "more"],
+  staff: ["home", "day", "tasks", "journal", "more"]
 };
 
 /* ---- МОК-данные (как из состояния бота) ---- */
@@ -103,6 +103,7 @@ const API = {
     return { ok: true };
   },
 
+  taskEdit(oldText, newText) { return this._post("tasks/edit", { old_text: oldText, new_text: newText }); },
   async taskDone(text) {
     if (USE_REMOTE) return fetch(`${API_BASE}/tasks/done`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).then(r => r.json());
@@ -132,6 +133,17 @@ const API = {
   addTask(text, company, priority) { return this._post("tasks/add", { text, company: company || "", priority: priority || "🟡" }); },
   addReminder(date, time, text) { return this._post("reminders/add", { date, time: time || "09:00", text }); },
   addBlock(date, start, end, text) { return this._post("agenda/add", { date, start, end: end || "", text }); },
+  addNote(text) { return this._post("note/add", { text }); },
+  itemMove(p) { return this._post("item/move", p); },
+  itemDelete(p) { return this._post("item/delete", p); },
+  async journal(limit) {
+    if (USE_REMOTE) return fetch(`${API_BASE}/journal?limit=${limit || 50}`).then(r => r.json());
+    return { entries: [] };
+  },
+  async month(ym) {
+    if (USE_REMOTE) return fetch(`${API_BASE}/month?ym=${encodeURIComponent(ym || "")}`).then(r => r.json());
+    return { dates: [] };
+  },
   dedup() { return this._post("tasks/dedup", {}); },
   pushKey() { return USE_REMOTE ? fetch(`${API_BASE}/push/key`).then(r => r.json()) : Promise.resolve({ key: "", ready: false }); },
   pushSubscribe(sub) { return this._post("push/subscribe", { subscription: sub }); },

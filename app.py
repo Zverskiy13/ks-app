@@ -11,7 +11,7 @@ ENV (Railway → Variables):
   APP_PINS       — (опц.) JSON-карта PIN→роль; иначе демо-пины 1111/2222/3333
 Старт: uvicorn app:app --host 0.0.0.0 --port $PORT   (см. Procfile)
 """
-import os, json, base64, re, datetime as dt
+import os, json, base64, re, threading, time as _time, datetime as dt
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +21,28 @@ import requests
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GH_REPO = os.environ.get("GITHUB_REPO", "")
 GH_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+
+# ---------- Web Push (VAPID) ----------
+VAPID_PUBLIC = os.environ.get("VAPID_PUBLIC", "BM9xFCyzg-emFABRWFgNt3-1ChYdUhhCgfZC5FZAumBhvidqJ3eeLNRdcMC8Sx-2sWh91PjM3NwAywvJGh00PT8")
+VAPID_SUB = os.environ.get("VAPID_SUB", "mailto:admin@kliniki-stolicy.ru")
+_VAPID_PEM = "/tmp/vapid.pem"
+if os.environ.get("VAPID_PRIVATE"):
+    try:
+        with open(_VAPID_PEM, "w") as _f:
+            _f.write(os.environ["VAPID_PRIVATE"])
+    except Exception:
+        pass
+PUSH_HOUR_UTC = int(os.environ.get("PUSH_HOUR_UTC", "5"))   # ≈8:00 МСК — утренний пуш
+
+
+def push_ready():
+    return os.path.exists(_VAPID_PEM)
+
+
+def send_push(sub, payload):
+    from pywebpush import webpush
+    webpush(subscription_info=sub, data=json.dumps(payload, ensure_ascii=False),
+            vapid_private_key=_VAPID_PEM, vapid_claims={"sub": VAPID_SUB})
 
 ROLE_SECTIONS = {
     "owner": ["home", "day", "tasks", "money", "funnel", "more"],
@@ -367,6 +389,73 @@ def day(user: str = "", date: str = ""):
     if cur < we:
         free.append(f"{cur//60:02d}:{cur%60:02d}–22:00")
     return {"date": d, "items": items, "free": free}
+
+
+@app.get("/api/push/key")
+def push_key():
+    return {"key": VAPID_PUBLIC, "ready": push_ready()}
+
+
+class Sub(BaseModel):
+    subscription: dict
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(b: Sub):
+    subs = load_json("state/push_subs.json", [])
+    ep = (b.subscription or {}).get("endpoint")
+    if not ep:
+        return {"ok": False}
+    if not any(s.get("endpoint") == ep for s in subs):
+        subs.append(b.subscription)
+        gh_write("state/push_subs.json", json.dumps(subs, ensure_ascii=False, indent=2), "app: push subscribe")
+    return {"ok": True, "count": len(subs)}
+
+
+@app.post("/api/push/test")
+def push_test():
+    if not push_ready():
+        return {"ok": False, "reason": "VAPID_PRIVATE не задан"}
+    subs = load_json("state/push_subs.json", [])
+    sent = 0
+    for s in subs:
+        try:
+            send_push(s, {"title": "Клиники Столицы", "body": "Тест уведомления — всё работает ✓", "url": "/"})
+            sent += 1
+        except Exception:
+            pass
+    return {"ok": True, "sent": sent}
+
+
+def _push_morning_loop():
+    last = {"d": ""}
+    while True:
+        try:
+            now = dt.datetime.now(dt.timezone.utc)
+            today = dt.date.today().isoformat()
+            if now.hour == PUSH_HOUR_UTC and last["d"] != today and push_ready():
+                subs = load_json("state/push_subs.json", [])
+                if subs:
+                    near = []
+                    for d in load_json("state/deadlines.json", []):
+                        if d.get("done"):
+                            continue
+                        n = days_until(d.get("date", ""))
+                        if n is not None and 0 <= n <= 7:
+                            near.append(f"{d.get('text', '')[:28]} — {n} дн")
+                    body = ("🔴 Горящее: " + "; ".join(near[:3])) if near else "Доброе утро! Открой план на день."
+                    for s in subs:
+                        try:
+                            send_push(s, {"title": "Доброе утро, Иван", "body": body, "url": "/"})
+                        except Exception:
+                            pass
+                last["d"] = today
+        except Exception:
+            pass
+        _time.sleep(180)
+
+
+threading.Thread(target=_push_morning_loop, daemon=True).start()
 
 
 # ---------- иконки приложения (генерируются при старте, без бинарей в git) ----------

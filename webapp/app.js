@@ -184,6 +184,8 @@ const RENDER = {
     el("s-more").innerHTML = `
       <h1 class="h">Ещё</h1>
       <div class="card" style="padding:6px 16px">
+        <div class="li" onclick="enablePush()"><i class="ti ti-bell-ringing" style="font-size:20px;color:var(--red)"></i><div class="t">Уведомления</div><span class="lbl" id="pushState">включить</span></div>
+        <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
         ${admin ? `<div class="li"><i class="ti ti-users" style="font-size:20px;color:var(--red)"></i><div class="t">Роли и доступ</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         <div class="li"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><span class="lbl">4 дня</span></div>
         <div class="li"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
@@ -259,6 +261,37 @@ async function saveCreate() {
   if (RENDER[s]) RENDER[s]();
 }
 function logout() { profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
+
+/* ---- пуш-уведомления ---- */
+function _b64ToU8(b64) {
+  const pad = "=".repeat((4 - b64.length % 4) % 4);
+  const s = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(s); const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+async function enablePush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    toast("Уведомления не поддерживаются. Открой как приложение с экрана «Домой»."); return;
+  }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Разрешение не выдано"); return; }
+    const k = await API.pushKey();
+    if (!k.key) { toast("Ключ не настроен на сервере"); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _b64ToU8(k.key) });
+    const r = await API.pushSubscribe(sub.toJSON ? sub.toJSON() : sub);
+    const st = el("pushState"); if (st) st.textContent = "включены ✓";
+    toast(r && r.ok !== false ? "Уведомления включены ✓" : "Не удалось подписаться");
+  } catch (e) { toast("Ошибка: " + (e && e.message ? e.message : e)); }
+}
+async function testPush() {
+  toast("Отправляю тест…");
+  const r = await API.pushTest();
+  toast(r && r.ok ? ("Отправлено: " + (r.sent || 0)) : ("Не вышло" + (r && r.reason ? " — " + r.reason : "")));
+}
 let toastT;
 function toast(msg) {
   let t = el("toast");

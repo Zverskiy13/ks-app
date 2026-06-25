@@ -26,10 +26,24 @@ GH_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 VAPID_PUBLIC = os.environ.get("VAPID_PUBLIC", "BM9xFCyzg-emFABRWFgNt3-1ChYdUhhCgfZC5FZAumBhvidqJ3eeLNRdcMC8Sx-2sWh91PjM3NwAywvJGh00PT8")
 VAPID_SUB = os.environ.get("VAPID_SUB", "mailto:admin@kliniki-stolicy.ru")
 _VAPID_PEM = "/tmp/vapid.pem"
+
+
+def _normalize_pem(raw):
+    """Принять ключ как угодно: многострочный PEM, PEM с \\n, или просто base64 одной строкой."""
+    raw = (raw or "").strip().replace("\\n", "\n")
+    m = re.search(r"-----BEGIN ([A-Z ]+)-----(.*?)-----END \1-----", raw, re.S)
+    if m:
+        label, body = m.group(1).strip(), re.sub(r"\s+", "", m.group(2))
+    else:
+        label, body = "PRIVATE KEY", re.sub(r"\s+", "", raw)
+    wrapped = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+    return f"-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n"
+
+
 if os.environ.get("VAPID_PRIVATE"):
     try:
         with open(_VAPID_PEM, "w") as _f:
-            _f.write(os.environ["VAPID_PRIVATE"])
+            _f.write(_normalize_pem(os.environ["VAPID_PRIVATE"]))
     except Exception:
         pass
 PUSH_HOUR_UTC = int(os.environ.get("PUSH_HOUR_UTC", "5"))   # ≈8:00 МСК — утренний пуш

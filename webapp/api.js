@@ -132,6 +132,7 @@ const API = {
   addTask(text, company, priority) { return this._post("tasks/add", { text, company: company || "", priority: priority || "🟡" }); },
   addReminder(date, time, text) { return this._post("reminders/add", { date, time: time || "09:00", text }); },
   addBlock(date, start, end, text) { return this._post("agenda/add", { date, start, end: end || "", text }); },
+  dedup() { return this._post("tasks/dedup", {}); },
   pushKey() { return USE_REMOTE ? fetch(`${API_BASE}/push/key`).then(r => r.json()) : Promise.resolve({ key: "", ready: false }); },
   pushSubscribe(sub) { return this._post("push/subscribe", { subscription: sub }); },
   pushTest() { return this._post("push/test", {}); },

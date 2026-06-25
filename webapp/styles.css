@@ -117,3 +117,9 @@ h1.h{font-size:26px;font-weight:700;letter-spacing:-.5px;margin:8px 0 16px;}
 #create input{border:1px solid var(--line);border-radius:12px;padding:11px 12px;font-size:15px;font-family:inherit;background:var(--card);color:var(--ink);}
 #create input:focus{outline:none;border-color:var(--red);}
 #create .seg b{cursor:pointer;}
+.cal-h{display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-size:11px;color:var(--muted);margin-bottom:5px;}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;}
+.cal-d{aspect-ratio:1;border:1px solid var(--line);background:var(--card);border-radius:10px;font-size:14px;font-weight:500;color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit;}
+.cal-d.tod{border-color:var(--red);color:var(--red);}
+.cal-d.sel{background:var(--red);color:#fff;border-color:var(--red);}
+.mbtn{border:1px solid var(--line);background:var(--card);border-radius:12px;width:40px;height:40px;font-size:20px;cursor:pointer;}

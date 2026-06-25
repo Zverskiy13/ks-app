@@ -13,8 +13,11 @@ const NAV = {
   more:   { label: "Ещё",     icon: "ti-dots" }
 };
 const WD = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+const MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
 let curDay = new Date().toISOString().slice(0, 10);
-function shiftDay(n) { const d = new Date(curDay); d.setDate(d.getDate() + n); curDay = d.toISOString().slice(0, 10); RENDER.day(); }
+let viewYM = curDay.slice(0, 7);
+function shiftMonth(n) { let [y, m] = viewYM.split("-").map(Number); m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } viewYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.day(); }
+function pickDay(iso) { curDay = iso; viewYM = iso.slice(0, 7); RENDER.day(); }
 function dayLabel(iso) { const d = new Date(iso); const t = new Date().toISOString().slice(0, 10); return (iso === t ? "Сегодня · " : "") + WD[d.getDay()] + " " + iso.slice(8, 10) + "." + iso.slice(5, 7); }
 
 /* ---------- PIN login ---------- */
@@ -101,17 +104,29 @@ const RENDER = {
   async day() {
     const dd = await API.day(curDay);
     const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
+    const [Y, M] = viewYM.split("-").map(Number);
+    const startW = (new Date(Y, M - 1, 1).getDay() + 6) % 7;
+    const dim = new Date(Y, M, 0).getDate();
+    const today = new Date().toISOString().slice(0, 10);
+    let cells = "";
+    for (let i = 0; i < startW; i++) cells += "<div></div>";
+    for (let d = 1; d <= dim; d++) {
+      const iso = `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')">${d}</button>`;
+    }
     el("s-day").innerHTML = `
-      <div class="row spread" style="margin:10px 0 16px">
-        <button onclick="shiftDay(-1)" aria-label="Назад" style="border:1px solid var(--line);background:var(--card);border-radius:12px;width:40px;height:40px;font-size:20px;cursor:pointer"><i class="ti ti-chevron-left"></i></button>
-        <div style="font-size:18px;font-weight:700">${dayLabel(curDay)}</div>
-        <button onclick="shiftDay(1)" aria-label="Вперёд" style="border:1px solid var(--line);background:var(--card);border-radius:12px;width:40px;height:40px;font-size:20px;cursor:pointer"><i class="ti ti-chevron-right"></i></button>
+      <div class="row spread" style="margin:8px 0 10px">
+        <button class="mbtn" onclick="shiftMonth(-1)" aria-label="Пред. месяц"><i class="ti ti-chevron-left"></i></button>
+        <div style="font-size:17px;font-weight:700">${MONTHS[M - 1]} ${Y}</div>
+        <button class="mbtn" onclick="shiftMonth(1)" aria-label="След. месяц"><i class="ti ti-chevron-right"></i></button>
       </div>
+      <div class="cal-h">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map((w) => `<div>${w}</div>`).join("")}</div>
+      <div class="cal">${cells}</div>
+      <div class="row spread" style="margin:16px 0 8px"><div style="font-weight:600">${dayLabel(curDay)}</div><button onclick="openCreate({type:'block', date: curDay})" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ в сетку</button></div>
       <div class="card" style="padding:6px 16px">
         ${dd.items && dd.items.length ? dd.items.map((it) => `<div class="li"><span class="tcell">${it.start}</span><i class="ti ${ic(it.kind)}" style="color:var(--muted)"></i><span class="t" style="font-weight:500">${it.text}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
-      ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}
-      <button class="btn red" onclick="openCreate({type:'block', date: curDay})">Добавить в сетку</button>`;
+      ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}`;
   },
 
   async tasks() {
@@ -125,11 +140,16 @@ const RENDER = {
     let filter = "all";
     const draw = () => {
       const list = tasks.filter((t) => filter === "all" ? true : filter === "hot" ? !t.done && t.priority === "🔴" : t.done);
-      el("tasklist").innerHTML = list.length ? list.map((t) => `
+      el("tasklist").innerHTML = list.length ? list.map((t) => t.done ? `
         <div class="li">
-          <span class="chk ${t.done ? "done" : ""}" onclick="closeTask('${t.id}')"><i class="ti ti-check" style="font-size:15px"></i></span>
-          <div class="t"><div class="${t.done ? "done-txt" : ""}">${t.text}</div>${t.done ? "" : `<div class="m">${t.company}${t.due ? " · " + t.due : ""}</div>`}</div>
-        </div>`).join("") : `<div class="lbl" style="padding:14px 0">Задач нет 🎉</div>`;
+          <span class="chk done"><i class="ti ti-check" style="font-size:15px"></i></span>
+          <div class="t"><div class="done-txt">${t.text}</div></div>
+          <button onclick="reopenTask('${t.id}')" title="Повторить на дату" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-rotate-clockwise"></i></button>
+        </div>` : `
+        <div class="li">
+          <span class="chk" onclick="closeTask('${t.id}')"><i class="ti ti-check" style="font-size:15px"></i></span>
+          <div class="t"><div>${t.text}</div><div class="m">${t.company}${t.due ? " · " + t.due : ""}</div></div>
+        </div>`).join("") : `<div class="lbl" style="padding:14px 0">${filter === "done" ? "Выполненных пока нет" : "Задач нет 🎉"}</div>`;
     };
     draw();
     document.querySelectorAll("#s-tasks .seg b").forEach((b) => b.onclick = () => {
@@ -186,6 +206,7 @@ const RENDER = {
       <div class="card" style="padding:6px 16px">
         <div class="li" onclick="enablePush()"><i class="ti ti-bell-ringing" style="font-size:20px;color:var(--red)"></i><div class="t">Уведомления</div><span class="lbl" id="pushState">включить</span></div>
         <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
+        ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         ${admin ? `<div class="li"><i class="ti ti-users" style="font-size:20px;color:var(--red)"></i><div class="t">Роли и доступ</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         <div class="li"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><span class="lbl">4 дня</span></div>
         <div class="li"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
@@ -261,6 +282,18 @@ async function saveCreate() {
   if (RENDER[s]) RENDER[s]();
 }
 function logout() { profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
+
+function reopenTask(id) {
+  const t = (window.__tasks || []).find((x) => x.id === id);
+  if (!t) return;
+  openCreate({ type: "rem", text: t.text, date: curDay });   // выбрать дату → создаст напоминание
+}
+async function dedupTasks() {
+  toast("Ищу дубли…");
+  const r = await API.dedup();
+  toast(r && r.ok ? (r.removed ? `Убрано дублей: ${r.removed}` : "Дублей не найдено") : "Не удалось");
+  if (RENDER.tasks) RENDER.tasks();
+}
 
 /* ---- пуш-уведомления ---- */
 function _b64ToU8(b64) {

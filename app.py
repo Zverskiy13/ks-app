@@ -145,11 +145,11 @@ def can_company(profile, company):
 
 
 # ---------- модель состояния бота → форма фронта ----------
-def parse_tasks(md):
+def _parse_section(md, header, done):
     out = []
-    if "## Активные" not in (md or ""):
+    if header not in (md or ""):
         return out
-    block = md.split("## Активные", 1)[1].split("\n##", 1)[0]
+    block = md.split(header, 1)[1].split("\n##", 1)[0]
     i = 0
     for ln in block.splitlines():
         ln = ln.strip()
@@ -158,15 +158,20 @@ def parse_tasks(md):
         pr = next((e for e in ("🔴", "🟡", "🟢") if e in ln), "🟡")
         m = re.search(r"\[([^\]]+)\]", ln)
         text = ln.lstrip("- ")
-        for e in ("🔴", "🟡", "🟢"):
+        for e in ("🔴", "🟡", "🟢", "✅"):
             text = text.replace(e, "")
         text = re.sub(r"\[[^\]]*\]", "", text)
         text = re.sub(r"_\([^)]*\)_", "", text)
         text = re.sub(r"\(T-[^)]*\)", "", text).strip()
         i += 1
-        out.append({"id": "t" + str(i), "text": text, "priority": pr,
-                    "company": m.group(1) if m else "", "due": "", "done": False})
+        out.append({"id": ("d" if done else "t") + str(i), "text": text, "priority": pr,
+                    "company": m.group(1) if m else "", "due": "", "done": done})
     return out
+
+
+def parse_tasks(md):
+    # активные + последние выполненные (для вкладки «Выполнено»)
+    return _parse_section(md, "## Активные", False) + _parse_section(md, "## Выполнено", True)[:40]
 
 
 def days_until(date_str):
@@ -335,6 +340,69 @@ def task_add(b: AddTask):
     md2 = md.replace("## Активные", "## Активные\n" + line, 1) if "## Активные" in md \
         else md.rstrip() + "\n\n## Активные\n" + line + "\n"
     return {"ok": gh_write("state/tasks.md", md2, "app: новая задача")}
+
+
+def _norm_simple(line):
+    s = line.lstrip("- ")
+    for e in ("🔴", "🟡", "🟢", "✅"):
+        s = s.replace(e, "")
+    s = re.sub(r"\[[^\]]*\]", " ", s)
+    s = re.sub(r"_\([^)]*\)_", " ", s)
+    s = re.sub(r"\(T-[^)]*\)", " ", s)
+    s = re.sub(r"[^\wа-яё0-9 ]", " ", s.lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _similar(a, b):
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    sa = {w[:5] for w in a.split() if len(w) >= 4}
+    sb = {w[:5] for w in b.split() if len(w) >= 4}
+    if not sa or not sb:
+        return False
+    return len(sa & sb) / len(sa | sb) >= 0.6
+
+
+@app.post("/api/tasks/dedup")
+def tasks_dedup():
+    md = gh_read("state/tasks.md") or ""
+    if "## Активные" not in md:
+        return {"ok": False, "removed": 0}
+    head, rest = md.split("## Активные", 1)
+    active_block = rest.split("\n##", 1)[0]
+    after = rest[len(active_block):]
+    lines = [l for l in active_block.splitlines() if l.strip().startswith("- ")]
+    norms = [_norm_simple(l) for l in lines]
+    n = len(lines)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _similar(norms[i], norms[j]):
+                parent[find(i)] = find(j)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    drop = set()
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        keep = max(idxs, key=lambda k: len(lines[k]))
+        for k in idxs:
+            if k != keep:
+                drop.add(k)
+    if not drop:
+        return {"ok": True, "removed": 0}
+    kept = [lines[k] for k in range(n) if k not in drop]
+    new_md = head + "## Активные\n" + "\n".join(kept) + "\n" + after
+    return {"ok": gh_write("state/tasks.md", new_md, f"app: dedup -{len(drop)}"), "removed": len(drop)}
 
 
 class AddReminder(BaseModel):

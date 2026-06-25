@@ -114,3 +114,6 @@ h1.h{font-size:26px;font-weight:700;letter-spacing:-.5px;margin:8px 0 16px;}
 .sheet h3{font-size:16px;font-weight:700;text-align:center;margin:10px 0 14px;}
 .opt{display:flex;align-items:center;gap:12px;padding:14px 4px;border-bottom:1px solid var(--line);cursor:pointer;}
 .opt:last-child{border-bottom:none;}
+#create input{border:1px solid var(--line);border-radius:12px;padding:11px 12px;font-size:15px;font-family:inherit;background:var(--card);color:var(--ink);}
+#create input:focus{outline:none;border-color:var(--red);}
+#create .seg b{cursor:pointer;}

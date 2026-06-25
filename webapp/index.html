@@ -37,10 +37,14 @@
         <button class="role" id="roleBtn"><span id="roleName">Владелец</span> <i class="ti ti-chevron-down"></i></button>
       </div>
     </div>
-    <i class="ti ti-bell" style="font-size:21px;color:var(--muted)"></i>
+    <div style="display:flex;align-items:center;gap:14px">
+      <button id="addBtn" aria-label="Создать" style="border:none;background:var(--red);color:#fff;width:34px;height:34px;border-radius:50%;font-size:22px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="ti ti-plus"></i></button>
+      <i class="ti ti-bell" style="font-size:21px;color:var(--muted)"></i>
+    </div>
   </div>
   <div class="scroll">
     <section class="scr" id="s-home"></section>
+    <section class="scr" id="s-day"></section>
     <section class="scr" id="s-tasks"></section>
     <section class="scr" id="s-money"></section>
     <section class="scr" id="s-funnel"></section>
@@ -48,6 +52,8 @@
   </div>
   <nav class="nav" id="nav"></nav>
 </div>
+
+<div id="create" class="sheet-bg hidden"></div>
 
 <div id="sheet" class="sheet-bg hidden">
   <div class="sheet">

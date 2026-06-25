@@ -6,11 +6,16 @@ const fmt = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n)) + " ₽"
 const el = (id) => document.getElementById(id);
 const NAV = {
   home:   { label: "Сегодня", icon: "ti-home-2" },
+  day:    { label: "День",    icon: "ti-calendar" },
   tasks:  { label: "Задачи",  icon: "ti-circle-check" },
   money:  { label: "Финансы", icon: "ti-wallet" },
   funnel: { label: "Воронка", icon: "ti-target" },
   more:   { label: "Ещё",     icon: "ti-dots" }
 };
+const WD = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+let curDay = new Date().toISOString().slice(0, 10);
+function shiftDay(n) { const d = new Date(curDay); d.setDate(d.getDate() + n); curDay = d.toISOString().slice(0, 10); RENDER.day(); }
+function dayLabel(iso) { const d = new Date(iso); const t = new Date().toISOString().slice(0, 10); return (iso === t ? "Сегодня · " : "") + WD[d.getDay()] + " " + iso.slice(8, 10) + "." + iso.slice(5, 7); }
 
 /* ---------- PIN login ---------- */
 function buildPad() {
@@ -91,6 +96,22 @@ const RENDER = {
       ${deadlines.length ? `<div class="sec-title">Горящие дедлайны</div>
       <div class="dl-row">${deadlines.map((d) => `<div class="dl ${d.level}"><div class="n">${d.days}</div><div class="lbl" style="font-size:11px">дн · ${d.text}</div></div>`).join("")}</div>` : ""}
     `;
+  },
+
+  async day() {
+    const dd = await API.day(curDay);
+    const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
+    el("s-day").innerHTML = `
+      <div class="row spread" style="margin:10px 0 16px">
+        <button onclick="shiftDay(-1)" aria-label="Назад" style="border:1px solid var(--line);background:var(--card);border-radius:12px;width:40px;height:40px;font-size:20px;cursor:pointer"><i class="ti ti-chevron-left"></i></button>
+        <div style="font-size:18px;font-weight:700">${dayLabel(curDay)}</div>
+        <button onclick="shiftDay(1)" aria-label="Вперёд" style="border:1px solid var(--line);background:var(--card);border-radius:12px;width:40px;height:40px;font-size:20px;cursor:pointer"><i class="ti ti-chevron-right"></i></button>
+      </div>
+      <div class="card" style="padding:6px 16px">
+        ${dd.items && dd.items.length ? dd.items.map((it) => `<div class="li"><span class="tcell">${it.start}</span><i class="ti ${ic(it.kind)}" style="color:var(--muted)"></i><span class="t" style="font-weight:500">${it.text}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
+      </div>
+      ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}
+      <button class="btn red" onclick="openCreate({type:'block', date: curDay})">Добавить в сетку</button>`;
   },
 
   async tasks() {
@@ -190,6 +211,53 @@ async function touchDeal(i) {
   toast(r && r.ok !== false ? "Касание отмечено ✓" : "Не удалось");
   RENDER.funnel();
 }
+
+/* ---- создание задачи / напоминания / блока ---- */
+function openCreate(pre) {
+  pre = pre || {};
+  const type = pre.type || "task";
+  const date = pre.date || curDay;
+  el("create").innerHTML = `
+    <div class="sheet">
+      <h3>Создать</h3>
+      <div class="seg" id="ctype">
+        <b data-t="task">Задача</b><b data-t="rem">Напоминание</b><b data-t="block">В сетку</b>
+      </div>
+      <input id="ctext" placeholder="Что нужно сделать…" value="${(pre.text || '').replace(/"/g, '&quot;')}">
+      <div id="cdate-wrap" style="display:flex;gap:8px;margin-top:10px">
+        <input type="date" id="cdate" value="${date}" style="flex:1">
+        <input type="time" id="ctime" value="${pre.start || '10:00'}" style="width:108px">
+        <input type="time" id="cend" value="${pre.end || ''}" style="width:108px">
+      </div>
+      <button class="btn red" style="margin-top:14px" onclick="saveCreate()">Сохранить</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
+    </div>`;
+  el("create").classList.remove("hidden");
+  document.querySelectorAll("#ctype b").forEach((b) => {
+    if (b.dataset.t === type) b.classList.add("on");
+    b.onclick = () => { document.querySelectorAll("#ctype b").forEach((x) => x.classList.remove("on")); b.classList.add("on"); applyCreateType(b.dataset.t); };
+  });
+  applyCreateType(type);
+}
+function applyCreateType(t) {
+  el("cdate-wrap").style.display = (t === "task") ? "none" : "flex";
+  el("cend").style.display = (t === "block") ? "" : "none";
+}
+function curType() { const b = document.querySelector("#ctype b.on"); return b ? b.dataset.t : "task"; }
+function closeCreate() { el("create").classList.add("hidden"); }
+async function saveCreate() {
+  const text = (el("ctext").value || "").trim();
+  if (!text) { toast("Введите текст"); return; }
+  const t = curType(); toast("Сохраняю…");
+  let r;
+  if (t === "task") r = await API.addTask(text);
+  else if (t === "rem") r = await API.addReminder(el("cdate").value, el("ctime").value, text);
+  else r = await API.addBlock(el("cdate").value, el("ctime").value, el("cend").value, text);
+  closeCreate();
+  toast(r && r.ok !== false ? "Добавлено ✓" : "Не удалось");
+  const a = document.querySelector("#nav button.on"); const s = a ? a.dataset.s : "home";
+  if (RENDER[s]) RENDER[s]();
+}
 function logout() { profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
 let toastT;
 function toast(msg) {
@@ -202,6 +270,8 @@ function toast(msg) {
 }
 
 /* role switch (demo) */
+el("addBtn").onclick = () => openCreate();
+el("create").onclick = (e) => { if (e.target.id === "create") closeCreate(); };
 el("roleBtn").onclick = () => el("sheet").classList.remove("hidden");
 el("sheet").onclick = (e) => { if (e.target.id === "sheet") el("sheet").classList.add("hidden"); };
 document.querySelectorAll("#sheet .opt").forEach((o) => o.onclick = async () => {

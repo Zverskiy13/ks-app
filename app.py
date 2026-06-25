@@ -23,9 +23,9 @@ GH_REPO = os.environ.get("GITHUB_REPO", "")
 GH_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 
 ROLE_SECTIONS = {
-    "owner": ["home", "tasks", "money", "funnel", "more"],
-    "head":  ["home", "tasks", "money", "funnel", "more"],
-    "staff": ["home", "tasks", "more"],
+    "owner": ["home", "day", "tasks", "money", "funnel", "more"],
+    "head":  ["home", "day", "tasks", "money", "funnel", "more"],
+    "staff": ["home", "day", "tasks", "more"],
 }
 DEFAULT_PINS = {
     "1111": {"id": "ivan",  "name": "Иван Кузин",         "role": "owner", "companies": "*",          "title": "Владелец"},
@@ -283,6 +283,90 @@ def finance(user: str = ""):
                if any(p in k for p in profile.get("companies", [])) and num(v.get("profit"))]
         return {"scope": "company", "data": {"companies": cos}}
     return {"scope": "none", "data": None}
+
+
+class AddTask(BaseModel):
+    text: str
+    company: str = ""
+    priority: str = "🟡"
+
+
+@app.post("/api/tasks/add")
+def task_add(b: AddTask):
+    md = gh_read("state/tasks.md") or "# Задачи\n\n## Активные\n\n## Выполнено\n"
+    today = dt.date.today().isoformat()
+    line = f"- {b.priority} [{b.company or 'Личное'}] {b.text.strip()} _(добавлено {today})_"
+    md2 = md.replace("## Активные", "## Активные\n" + line, 1) if "## Активные" in md \
+        else md.rstrip() + "\n\n## Активные\n" + line + "\n"
+    return {"ok": gh_write("state/tasks.md", md2, "app: новая задача")}
+
+
+class AddReminder(BaseModel):
+    date: str
+    time: str = "09:00"
+    text: str
+
+
+@app.post("/api/reminders/add")
+def reminder_add(b: AddReminder):
+    rems = load_json("state/reminders.json", [])
+    rems.append({"when": f"{b.date}T{b.time}", "text": b.text.strip(), "done": False})
+    return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминание")}
+
+
+class AddBlock(BaseModel):
+    date: str
+    start: str
+    end: str = ""
+    text: str
+
+
+@app.post("/api/agenda/add")
+def agenda_add(b: AddBlock):
+    ag = load_json("state/agenda.json", [])
+    ag.append({"date": b.date, "start": b.start, "end": (b.end or None), "text": b.text.strip()})
+    return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок в сетку")}
+
+
+@app.get("/api/day")
+def day(user: str = "", date: str = ""):
+    d = date or dt.date.today().isoformat()
+    items = []
+    for a in load_json("state/agenda.json", []):
+        if a.get("date") == d and a.get("start"):
+            items.append({"start": a["start"], "end": a.get("end"), "text": a.get("text", ""), "kind": "block"})
+    for r in load_json("state/reminders.json", []):
+        if r.get("done"):
+            continue
+        w = r.get("when", "")
+        if len(w) >= 16 and w[:10] == d and "T" in w:
+            items.append({"start": w[11:16], "end": None, "text": r.get("text", ""), "kind": "rem"})
+    items.sort(key=lambda x: x["start"])
+
+    def m(s):
+        try:
+            hh, mm = s.split(":")
+            return int(hh) * 60 + int(mm)
+        except Exception:
+            return None
+    ws, we = 8 * 60, 22 * 60
+    busy = []
+    for it in items:
+        s = m(it["start"])
+        e = m(it["end"]) if it["end"] else (s + 60 if s is not None else None)
+        if s is None:
+            continue
+        busy.append((max(s, ws), min(max(e, s + 15), we)))
+    busy = [x for x in busy if x[0] < we and x[1] > ws]
+    busy.sort()
+    free, cur = [], ws
+    for s, e in busy:
+        if s > cur:
+            free.append(f"{cur//60:02d}:{cur%60:02d}–{s//60:02d}:{s%60:02d}")
+        cur = max(cur, e)
+    if cur < we:
+        free.append(f"{cur//60:02d}:{cur%60:02d}–22:00")
+    return {"date": d, "items": items, "free": free}
 
 
 # ---------- иконки приложения (генерируются при старте, без бинарей в git) ----------

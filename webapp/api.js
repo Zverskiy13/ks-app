@@ -14,9 +14,9 @@ const USERS = {
 };
 
 const ROLE_SECTIONS = {
-  owner: ["home", "tasks", "money", "funnel", "more"],
-  head:  ["home", "tasks", "money", "funnel", "more"],
-  staff: ["home", "tasks", "more"]
+  owner: ["home", "day", "tasks", "money", "funnel", "more"],
+  head:  ["home", "day", "tasks", "money", "funnel", "more"],
+  staff: ["home", "day", "tasks", "more"]
 };
 
 /* ---- МОК-данные (как из состояния бота) ---- */
@@ -116,6 +116,22 @@ const API = {
     const d = DB.deals.find(x => x.name === name); if (d) d.silent = 0;
     return { ok: true };
   },
+
+  async day(date) {
+    if (USE_REMOTE) return fetch(`${API_BASE}/day?date=${encodeURIComponent(date || "")}`).then(r => r.json());
+    const items = DB.agenda.filter(a => a.who ? a.who === "ivan" || a.company === "*" : true)
+      .map(a => ({ start: a.time, end: null, text: a.text, kind: "block" })).sort((x, y) => x.start.localeCompare(y.start));
+    return { date: date || "", items, free: ["08:30–10:00", "11:00–14:00", "после 16:00"] };
+  },
+
+  async _post(path, body) {
+    if (USE_REMOTE) return fetch(`${API_BASE}/${path}`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
+    return { ok: true };
+  },
+  addTask(text, company, priority) { return this._post("tasks/add", { text, company: company || "", priority: priority || "🟡" }); },
+  addReminder(date, time, text) { return this._post("reminders/add", { date, time: time || "09:00", text }); },
+  addBlock(date, start, end, text) { return this._post("agenda/add", { date, start, end: end || "", text }); },
 
   async deals(profile) {
     if (USE_REMOTE) return this._get("deals", profile);

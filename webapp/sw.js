@@ -1,14 +1,10 @@
-/* Сервис-воркер: офлайн-кэш оболочки приложения «Клиники Столицы». */
-const CACHE = "ks-app-v3";
+/* Сервис-воркер «Клиники Столицы».
+   Код приложения (html/js/css) — network-first: всегда свежий при интернете,
+   кэш только как офлайн-резерв. Иконки — cache-first. API — сеть. */
+const CACHE = "ks-app-v5";
 const ASSETS = [
-  "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./api.js",
-  "./manifest.webmanifest",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
-  "./icons/apple-touch-icon.png"
+  "./index.html", "./styles.css", "./app.js", "./api.js", "./manifest.webmanifest",
+  "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"
 ];
 
 self.addEventListener("install", (e) => {
@@ -24,10 +20,20 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  // API-запросы — всегда из сети (свежие данные), оболочка — из кэша
-  if (url.pathname.includes("/api/")) {
+  if (url.pathname.includes("/api/")) {                 // данные — из сети
     e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
     return;
   }
-  e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
+  if (/\.(?:js|css|webmanifest)$|\/$|index\.html$/.test(url.pathname)) {
+    // код/оболочка — network-first (свежее при интернете, кэш в офлайне)
+    e.respondWith(
+      fetch(e.request).then((r) => {
+        const cp = r.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, cp));
+        return r;
+      }).catch(() => caches.match(e.request))
+    );
+    return;
+  }
+  e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));  // иконки и пр.
 });

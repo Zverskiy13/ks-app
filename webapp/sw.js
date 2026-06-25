@@ -1,5 +1,5 @@
 /* Сервис-воркер: офлайн-кэш оболочки приложения «Клиники Столицы». */
-const CACHE = "ks-app-v2";
+const CACHE = "ks-app-v3";
 const ASSETS = [
   "./index.html",
   "./styles.css",

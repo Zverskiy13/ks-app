@@ -80,9 +80,9 @@ const RENDER = {
         <div class="bot"><span class="lbl"><i class="ti ti-clock"></i> ${top.due || top.company}</span><span class="link" onclick="show('tasks')">Открыть ›</span></div>
       </div>` : ""}
       <div class="qa-row">
-        <div class="qa" onclick="toast('Добавление задачи')"><i class="ti ti-plus"></i>Добавить</div>
-        <div class="qa" onclick="toast('Голосовой ввод')"><i class="ti ti-microphone"></i>Голос</div>
-        <div class="qa" onclick="toast('Авто-план дня')"><i class="ti ti-wand"></i>Авто-план</div>
+        <div class="qa" onclick="toast('Добавление — скоро')"><i class="ti ti-plus"></i>Добавить</div>
+        <div class="qa" onclick="toast('Голосовой ввод — скоро')"><i class="ti ti-microphone"></i>Голос</div>
+        <div class="qa" onclick="toast('Авто-план — скоро')"><i class="ti ti-wand"></i>Авто-план</div>
       </div>
       <div class="row spread"><div class="sec-title">Сегодня по часам</div></div>
       <div class="card" style="padding:4px 16px">
@@ -99,13 +99,14 @@ const RENDER = {
       <h1 class="h">${profile.role === "staff" ? "Мои задачи" : "Задачи"}</h1>
       <div class="seg"><b class="on" data-f="all">Все</b><b data-f="hot">Срочные</b><b data-f="done">Выполнено</b></div>
       <div class="card" id="tasklist" style="padding:6px 16px"></div>
-      <button class="btn red" style="margin-top:14px" onclick="toast('Подсказка: что делать сейчас')">Что делать сейчас?</button>`;
+      <button class="btn red" style="margin-top:14px" onclick="toast('Подсказка дня — скоро')">Что делать сейчас?</button>`;
+    window.__tasks = tasks;
     let filter = "all";
     const draw = () => {
       const list = tasks.filter((t) => filter === "all" ? true : filter === "hot" ? !t.done && t.priority === "🔴" : t.done);
       el("tasklist").innerHTML = list.length ? list.map((t) => `
         <div class="li">
-          <span class="chk ${t.done ? "done" : ""}" onclick="toggle('${t.id}')"><i class="ti ti-check" style="font-size:15px"></i></span>
+          <span class="chk ${t.done ? "done" : ""}" onclick="closeTask('${t.id}')"><i class="ti ti-check" style="font-size:15px"></i></span>
           <div class="t"><div class="${t.done ? "done-txt" : ""}">${t.text}</div>${t.done ? "" : `<div class="m">${t.company}${t.due ? " · " + t.due : ""}</div>`}</div>
         </div>`).join("") : `<div class="lbl" style="padding:14px 0">Задач нет 🎉</div>`;
     };
@@ -145,14 +146,16 @@ const RENDER = {
   async funnel() {
     const deals = await API.deals(profile);
     const icon = (s) => s === "переговоры" ? "ti-flame" : s === "контакт" ? "ti-phone-call" : "ti-seeding";
+    window.__deals = deals;
     el("s-funnel").innerHTML = `
       <h1 class="h">Воронка</h1>
       <div class="card" style="padding:6px 16px">
-        ${deals.map((d)=>`<div class="li"><i class="ti ${icon(d.stage)}" style="font-size:20px;color:${d.silent>=7?"var(--red)":"var(--muted)"}"></i>
+        ${deals.map((d,i)=>`<div class="li"><i class="ti ${icon(d.stage)}" style="font-size:20px;color:${d.silent>=7?"var(--red)":"var(--muted)"}"></i>
           <div class="t"><div>${d.name}</div><div class="m">${d.stage} · ${d.step}</div></div>
-          <span class="badge ${d.silent>=7?"red":""}" style="${d.silent<7?"color:var(--muted)":""}">${d.silent} дн</span></div>`).join("")}
+          <span class="badge ${d.silent>=7?"red":""}" style="margin-right:8px;${d.silent<7?"color:var(--muted)":""}">${d.silent} дн</span>
+          <button onclick="touchDeal(${i})" title="Отметить касание" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;cursor:pointer;color:var(--red)"><i class="ti ti-hand-finger"></i></button></div>`).join("")}
       </div>
-      <button class="btn ghost" onclick="toast('Сделки, где тишина')">Что провисает?</button>`;
+      <div class="lbl" style="padding:6px 2px">Нажми ✋ у сделки — отметить, что связался (обнулит «тишину»).</div>`;
   },
 
   async more() {
@@ -171,7 +174,22 @@ const RENDER = {
 };
 
 /* ---------- actions ---------- */
-async function toggle(id) { await API.toggleTask(id); RENDER.tasks(); }
+async function closeTask(id) {
+  const t = (window.__tasks || []).find((x) => x.id === id);
+  if (!t) return;
+  toast("Закрываю…");
+  const r = await API.taskDone(t.text);
+  toast(r && r.ok !== false ? "Закрыто ✓" : "Не удалось закрыть");
+  RENDER.tasks();
+}
+async function touchDeal(i) {
+  const d = (window.__deals || [])[i];
+  if (!d) return;
+  toast("Отмечаю…");
+  const r = await API.dealTouch(d.name);
+  toast(r && r.ok !== false ? "Касание отмечено ✓" : "Не удалось");
+  RENDER.funnel();
+}
 function logout() { profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
 let toastT;
 function toast(msg) {
@@ -179,7 +197,7 @@ function toast(msg) {
   if (!t) { t = document.createElement("div"); t.id = "toast";
     t.style.cssText = "position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;z-index:50;opacity:0;transition:.2s;max-width:80%;text-align:center";
     document.body.appendChild(t); }
-  t.textContent = msg + " — в рабочей версии";
+  t.textContent = msg;
   t.style.opacity = "1"; clearTimeout(toastT); toastT = setTimeout(() => t.style.opacity = "0", 1600);
 }
 

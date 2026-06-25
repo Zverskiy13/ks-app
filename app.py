@@ -59,6 +59,40 @@ def load_json(path, default):
         return default
 
 
+def gh_write(path, content, message):
+    """Записать файл в репозиторий бота (PUT contents с актуальным sha)."""
+    if not (GH_TOKEN and GH_REPO):
+        return False
+    url = f"https://api.github.com/repos/{GH_REPO}/contents/{path}"
+    h = {"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github+json"}
+    sha = None
+    try:
+        r = requests.get(f"{url}?ref={GH_BRANCH}", headers=h, timeout=15)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
+    except Exception:
+        pass
+    body = {"message": message, "branch": GH_BRANCH,
+            "content": base64.b64encode(content.encode("utf-8")).decode("ascii")}
+    if sha:
+        body["sha"] = sha
+    try:
+        pr = requests.put(url, headers=h, json=body, timeout=20)
+        return pr.status_code in (200, 201)
+    except Exception:
+        return False
+
+
+def _clean_task(s):
+    s = s.lstrip("- ")
+    for e in ("🔴", "🟡", "🟢", "✅"):
+        s = s.replace(e, "")
+    s = re.sub(r"\[[^\]]*\]", "", s)
+    s = re.sub(r"_\([^)]*\)_", "", s)
+    s = re.sub(r"\(T-[^)]*\)", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def by_id(uid):
     for u in PINS.values():
         if u["id"] == uid:
@@ -154,9 +188,56 @@ def tasks(user: str = ""):
     return [t for t in items if t.get("assignee") == profile["id"]]
 
 
-@app.post("/api/tasks/{tid}/toggle")
-def toggle(tid: str):
-    return {"ok": True}  # TODO: запись закрытия в tasks.md (через GitHub PUT)
+class Done(BaseModel):
+    text: str
+
+
+@app.post("/api/tasks/done")
+def task_done(b: Done):
+    """Закрыть задачу: убрать из «Активные», добавить в «Выполнено». Пишет в tasks.md."""
+    md = gh_read("state/tasks.md") or ""
+    target = (b.text or "").strip()
+    if not target or "## Активные" not in md:
+        return {"ok": False}
+    out, removed, in_active = [], None, False
+    for l in md.splitlines():
+        st = l.strip()
+        if st.startswith("## "):
+            in_active = (st == "## Активные")
+        if in_active and removed is None and st.startswith("- ") and \
+                (target in _clean_task(l) or _clean_task(l) in target):
+            removed = l
+            continue
+        out.append(l)
+    if removed is None:
+        return {"ok": False, "reason": "not found"}
+    md2 = "\n".join(out)
+    done = f"- ✅ {target} _(закрыто {dt.date.today().isoformat()})_"
+    if "## Выполнено" in md2:
+        md2 = md2.replace("## Выполнено", "## Выполнено\n" + done, 1)
+    else:
+        md2 = md2.rstrip() + "\n\n## Выполнено\n" + done + "\n"
+    return {"ok": gh_write("state/tasks.md", md2, "app: закрыта задача — " + target[:40])}
+
+
+class Touch(BaseModel):
+    name: str
+
+
+@app.post("/api/deals/touch")
+def deal_touch(b: Touch):
+    """Отметить касание сделки: last_touch = сегодня. Пишет в deals.json."""
+    deals = load_json("state/deals.json", [])
+    nm = (b.name or "").strip()
+    hit = False
+    for d in deals:
+        if nm and nm in d.get("name", ""):
+            d["last_touch"] = dt.date.today().isoformat()
+            hit = True
+            break
+    if not hit:
+        return {"ok": False}
+    return {"ok": gh_write("state/deals.json", json.dumps(deals, ensure_ascii=False, indent=2), "app: касание сделки")}
 
 
 @app.get("/api/deals")

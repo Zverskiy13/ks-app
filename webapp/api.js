@@ -100,7 +100,20 @@ const API = {
 
   async toggleTask(id) {
     const t = DB.tasks.find(x => x.id === id); if (t) t.done = !t.done;
-    if (USE_REMOTE) fetch(`${API_BASE}/tasks/${id}/toggle`, { method: "POST" });
+    return { ok: true };
+  },
+
+  async taskDone(text) {
+    if (USE_REMOTE) return fetch(`${API_BASE}/tasks/done`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).then(r => r.json());
+    const t = DB.tasks.find(x => x.text === text); if (t) t.done = true;
+    return { ok: true };
+  },
+
+  async dealTouch(name) {
+    if (USE_REMOTE) return fetch(`${API_BASE}/deals/touch`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).then(r => r.json());
+    const d = DB.deals.find(x => x.name === name); if (d) d.silent = 0;
     return { ok: true };
   },
 

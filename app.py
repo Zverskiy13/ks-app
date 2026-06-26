@@ -124,6 +124,7 @@ def _clean_task(s):
     for e in ("🔴", "🟡", "🟢", "✅"):
         s = s.replace(e, "")
     s = re.sub(r"\[[^\]]*\]", "", s)
+    s = re.sub(r"\(до:\d{4}-\d{2}-\d{2}\)", "", s)
     s = re.sub(r"_\([^)]*\)_", "", s)
     s = re.sub(r"\(T-[^)]*\)", "", s)
     return re.sub(r"\s+", " ", s).strip()
@@ -157,15 +158,17 @@ def _parse_section(md, header, done):
             continue
         pr = next((e for e in ("🔴", "🟡", "🟢") if e in ln), "🟡")
         m = re.search(r"\[([^\]]+)\]", ln)
+        dm = re.search(r"\(до:(\d{4}-\d{2}-\d{2})\)", ln)
         text = ln.lstrip("- ")
         for e in ("🔴", "🟡", "🟢", "✅"):
             text = text.replace(e, "")
         text = re.sub(r"\[[^\]]*\]", "", text)
+        text = re.sub(r"\(до:\d{4}-\d{2}-\d{2}\)", "", text)
         text = re.sub(r"_\([^)]*\)_", "", text)
         text = re.sub(r"\(T-[^)]*\)", "", text).strip()
         i += 1
         out.append({"id": ("d" if done else "t") + str(i), "text": text, "priority": pr,
-                    "company": m.group(1) if m else "", "due": "", "done": done})
+                    "company": m.group(1) if m else "", "due": dm.group(1) if dm else "", "done": done})
     return out
 
 
@@ -199,7 +202,7 @@ def today(user: str = ""):
     today_iso = dt.date.today().isoformat()
     agenda = []
     for a in load_json("state/agenda.json", []):
-        if a.get("date") == today_iso and a.get("start"):
+        if a.get("date") == today_iso and a.get("start") and not a.get("done"):
             if profile["role"] == "owner" or can_company(profile, a.get("company", "")) or not a.get("company"):
                 agenda.append({"time": a["start"], "text": a.get("text", ""), "icon": "ti-clock"})
     agenda.sort(key=lambda x: x["time"])
@@ -264,6 +267,7 @@ def task_done(b: Done):
 class EditTask(BaseModel):
     old_text: str
     new_text: str
+    due: str = "__keep__"   # "__keep__" — не трогать срок; "" — убрать; "YYYY-MM-DD" — поставить
 
 
 @app.post("/api/tasks/edit")
@@ -282,9 +286,12 @@ def task_edit(b: EditTask):
             pr = next((e for e in ("🔴", "🟡", "🟢") if e in l), "🟡")
             mc = re.search(r"\[([^\]]+)\]", l)
             mt = re.search(r"_\([^)]*\)_", l)
+            md_old = re.search(r"\(до:(\d{4}-\d{2}-\d{2})\)", l)
             comp = mc.group(1) if mc else "Личное"
             tail = (" " + mt.group(0)) if mt else ""
-            out.append(f"- {pr} [{comp}] {new}{tail}")
+            due_val = (md_old.group(1) if md_old else "") if b.due == "__keep__" else b.due
+            due_tag = f" (до:{due_val})" if due_val else ""
+            out.append(f"- {pr} [{comp}] {new}{due_tag}{tail}")
             edited = True
             continue
         out.append(l)
@@ -362,13 +369,15 @@ class AddTask(BaseModel):
     text: str
     company: str = ""
     priority: str = "🟡"
+    due: str = ""
 
 
 @app.post("/api/tasks/add")
 def task_add(b: AddTask):
     md = gh_read("state/tasks.md") or "# Задачи\n\n## Активные\n\n## Выполнено\n"
     today = dt.date.today().isoformat()
-    line = f"- {b.priority} [{b.company or 'Личное'}] {b.text.strip()} _(добавлено {today})_"
+    due_tag = f" (до:{b.due})" if b.due else ""
+    line = f"- {b.priority} [{b.company or 'Личное'}] {b.text.strip()}{due_tag} _(добавлено {today})_"
     md2 = md.replace("## Активные", "## Активные\n" + line, 1) if "## Активные" in md \
         else md.rstrip() + "\n\n## Активные\n" + line + "\n"
     return {"ok": gh_write("state/tasks.md", md2, "app: новая задача")}
@@ -563,7 +572,7 @@ def day(user: str = "", date: str = ""):
     d = date or dt.date.today().isoformat()
     items = []
     for a in load_json("state/agenda.json", []):
-        if a.get("date") == d and a.get("start"):
+        if a.get("date") == d and a.get("start") and not a.get("done"):
             items.append({"start": a["start"], "end": a.get("end"), "text": a.get("text", ""), "kind": "block"})
     for r in load_json("state/reminders.json", []):
         if r.get("done"):
@@ -698,6 +707,208 @@ def ensure_icons():
 
 
 ensure_icons()
+
+# ---------- отметить пункт сетки/напоминание выполненным ----------
+class ItemDone(BaseModel):
+    kind: str
+    date: str
+    start: str
+    text: str
+
+
+@app.post("/api/item/done")
+def item_done(b: ItemDone):
+    if b.kind == "block":
+        ag = load_json("state/agenda.json", [])
+        for a in ag:
+            if a.get("date") == b.date and a.get("start") == b.start and a.get("text", "") == b.text:
+                a["done"] = True
+                return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок выполнен")}
+        return {"ok": False, "reason": "not found"}
+    else:
+        rems = load_json("state/reminders.json", [])
+        for r in rems:
+            w = r.get("when", "")
+            if w[:10] == b.date and w[11:16] == b.start and r.get("text", "") == b.text:
+                r["done"] = True
+                return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминание выполнено")}
+        return {"ok": False, "reason": "not found"}
+
+
+# ---------- дедлайны: список / правка / выполнено / добавить ----------
+@app.get("/api/deadlines")
+def deadlines_list(user: str = ""):
+    profile = by_id(user)
+    raw = load_json("state/deadlines.json", [])
+    out = []
+    for i, d in enumerate(raw):
+        if d.get("done"):
+            continue
+        if profile["role"] != "owner" and not (can_company(profile, d.get("company", "")) or (d.get("company") == "Группа" and profile["role"] == "head")):
+            continue
+        n = days_until(d.get("date", ""))
+        out.append({"i": i, "date": d.get("date", ""), "text": d.get("text", ""),
+                    "company": d.get("company", ""), "days": n})
+    out.sort(key=lambda x: (x["days"] is None, x["days"] if x["days"] is not None else 0))
+    return out
+
+
+class DlEdit(BaseModel):
+    i: int
+    date: str = ""
+    text: str = ""
+
+
+@app.post("/api/deadlines/edit")
+def deadline_edit(b: DlEdit):
+    raw = load_json("state/deadlines.json", [])
+    if b.i < 0 or b.i >= len(raw):
+        return {"ok": False, "reason": "bad index"}
+    if b.date:
+        raw[b.i]["date"] = b.date
+    if b.text:
+        raw[b.i]["text"] = b.text.strip()
+    return {"ok": gh_write("state/deadlines.json", json.dumps(raw, ensure_ascii=False, indent=2), "app: дедлайн изменён")}
+
+
+class DlDone(BaseModel):
+    i: int
+
+
+@app.post("/api/deadlines/done")
+def deadline_done(b: DlDone):
+    raw = load_json("state/deadlines.json", [])
+    if b.i < 0 or b.i >= len(raw):
+        return {"ok": False}
+    raw[b.i]["done"] = True
+    return {"ok": gh_write("state/deadlines.json", json.dumps(raw, ensure_ascii=False, indent=2), "app: дедлайн закрыт")}
+
+
+class DlAdd(BaseModel):
+    date: str
+    text: str
+    company: str = ""
+
+
+@app.post("/api/deadlines/add")
+def deadline_add(b: DlAdd):
+    raw = load_json("state/deadlines.json", [])
+    raw.append({"date": b.date, "text": b.text.strip(), "company": b.company, "done": False})
+    return {"ok": gh_write("state/deadlines.json", json.dumps(raw, ensure_ascii=False, indent=2), "app: новый дедлайн")}
+
+
+# ---------- цели и рычаги ----------
+@app.get("/api/goals")
+def goals(user: str = ""):
+    bosses = load_json("state/bosses.json", [])
+    gl = []
+    for g in bosses:
+        tot = g.get("total") or 0
+        left = g.get("left", tot)
+        pct = 0 if not tot else max(0, min(100, round((tot - left) / tot * 100)))
+        gl.append({"name": g.get("name", ""), "total": tot, "left": left, "unit": g.get("unit", ""), "pct": pct})
+    lev = load_json("state/levers.json", {})
+    levers = lev.get("levers", []) if isinstance(lev, dict) else []
+    levers = [{"name": l.get("name", ""), "impact": l.get("impact", 0),
+               "progress": l.get("progress", 0), "note": l.get("note", "")} for l in levers]
+    return {"goals": gl, "levers": levers}
+
+
+# ---------- план недели ----------
+@app.get("/api/weekplan")
+def weekplan(user: str = ""):
+    ag = load_json("state/agenda.json", [])
+    rems = load_json("state/reminders.json", [])
+    today = dt.date.today()
+    days = []
+    for off in range(7):
+        iso = (today + dt.timedelta(days=off)).isoformat()
+        items = []
+        for a in ag:
+            if a.get("date") == iso and a.get("start") and not a.get("done"):
+                items.append({"time": a["start"], "text": a.get("text", ""), "kind": "block"})
+        for r in rems:
+            w = r.get("when", "")
+            if not r.get("done") and w[:10] == iso and "T" in w:
+                items.append({"time": w[11:16], "text": r.get("text", ""), "kind": "rem"})
+        items.sort(key=lambda x: x["time"])
+        days.append({"date": iso, "items": items})
+    tasks = parse_tasks(gh_read("state/tasks.md") or "")
+    end = (today + dt.timedelta(days=6)).isoformat()
+    wt = [t for t in tasks if not t["done"] and t["due"] and today.isoformat() <= t["due"] <= end]
+    return {"days": days, "tasks": wt}
+
+
+# ---------- привычки и шаги ----------
+def _streak(date_strs):
+    days = set()
+    for s in date_strs:
+        try:
+            days.add(dt.date.fromisoformat(s))
+        except Exception:
+            pass
+    today = dt.date.today()
+    if today in days:
+        cur = today
+    elif (today - dt.timedelta(days=1)) in days:
+        cur = today - dt.timedelta(days=1)
+    else:
+        return 0
+    n = 0
+    while cur in days:
+        n += 1
+        cur -= dt.timedelta(days=1)
+    return n
+
+
+def _ladder_goal(plan, streak):
+    ladder = plan.get("ladder") or []
+    if not ladder:
+        return plan.get("goal", "")
+    cur = ladder[0].get("goal", "")
+    for lvl in sorted(ladder, key=lambda x: x.get("min", 0)):
+        if streak >= lvl.get("min", 0):
+            cur = lvl.get("goal", cur)
+    return cur
+
+
+@app.get("/api/habits")
+def habits(user: str = ""):
+    plans = load_json("state/habit_plans.json", {})
+    log = load_json("state/habits.json", {})
+    today = dt.date.today()
+    out = []
+    for name in sorted(set(list(plans.keys()) + list(log.keys()))):
+        dates = log.get(name, [])
+        ds = set()
+        for s in dates:
+            try:
+                ds.add(dt.date.fromisoformat(s))
+            except Exception:
+                pass
+        chain = [(today - dt.timedelta(days=i)) in ds for i in range(6, -1, -1)]
+        plan = plans.get(name, {})
+        st = _streak(dates)
+        out.append({"name": name, "streak": st, "chain": chain, "week": sum(chain),
+                    "goal": _ladder_goal(plan, st), "anchor": plan.get("anchor", ""),
+                    "category": plan.get("category", ""), "done_today": today.isoformat() in {s for s in dates}})
+    return {"habits": out}
+
+
+class HabitDone(BaseModel):
+    habit: str
+
+
+@app.post("/api/habits/done")
+def habit_done(b: HabitDone):
+    log = load_json("state/habits.json", {})
+    today = dt.date.today().isoformat()
+    arr = log.get(b.habit, [])
+    if today not in arr:
+        arr.append(today)
+    log[b.habit] = arr
+    return {"ok": gh_write("state/habits.json", json.dumps(log, ensure_ascii=False, indent=2), "app: привычка отмечена")}
+
 
 # ---------- статика PWA ----------
 if os.path.isdir(WEB):

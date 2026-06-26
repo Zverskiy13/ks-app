@@ -4,4 +4,3 @@ requests
 pydantic
 pillow>=10.1
 pywebpush
-anthropic>=0.40

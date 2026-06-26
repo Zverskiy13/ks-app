@@ -103,7 +103,7 @@ const API = {
     return { ok: true };
   },
 
-  taskEdit(oldText, newText) { return this._post("tasks/edit", { old_text: oldText, new_text: newText }); },
+  taskEdit(oldText, newText, due) { return this._post("tasks/edit", { old_text: oldText, new_text: newText, ...(due === undefined ? {} : { due }) }); },
   async taskDone(text) {
     if (USE_REMOTE) return fetch(`${API_BASE}/tasks/done`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).then(r => r.json());
@@ -130,12 +130,21 @@ const API = {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
     return { ok: true };
   },
-  addTask(text, company, priority) { return this._post("tasks/add", { text, company: company || "", priority: priority || "🟡" }); },
+  addTask(text, company, priority, due) { return this._post("tasks/add", { text, company: company || "", priority: priority || "🟡", due: due || "" }); },
   addReminder(date, time, text) { return this._post("reminders/add", { date, time: time || "09:00", text }); },
   addBlock(date, start, end, text) { return this._post("agenda/add", { date, start, end: end || "", text }); },
   addNote(text) { return this._post("note/add", { text }); },
   itemMove(p) { return this._post("item/move", p); },
   itemDelete(p) { return this._post("item/delete", p); },
+  itemDone(p) { return this._post("item/done", p); },
+  deadlines(profile) { return USE_REMOTE ? this._get("deadlines", profile) : Promise.resolve([]); },
+  deadlineEdit(p) { return this._post("deadlines/edit", p); },
+  deadlineDone(i) { return this._post("deadlines/done", { i }); },
+  deadlineAdd(p) { return this._post("deadlines/add", p); },
+  goals(profile) { return USE_REMOTE ? this._get("goals", profile) : Promise.resolve({ goals: [], levers: [] }); },
+  weekplan(profile) { return USE_REMOTE ? this._get("weekplan", profile) : Promise.resolve({ days: [], tasks: [] }); },
+  habits(profile) { return USE_REMOTE ? this._get("habits", profile) : Promise.resolve({ habits: [] }); },
+  habitDone(habit) { return this._post("habits/done", { habit }); },
   async journal(limit) {
     if (USE_REMOTE) return fetch(`${API_BASE}/journal?limit=${limit || 50}`).then(r => r.json());
     return { entries: [] };

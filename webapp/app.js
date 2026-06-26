@@ -77,28 +77,30 @@ function show(s) {
 /* ---------- renderers ---------- */
 const RENDER = {
   async home() {
-    const { agenda, deadlines } = await API.today(profile);
+    const { agenda } = await API.today(profile);
     const tasks = await API.tasks(profile);
+    const dls = await API.deadlines(profile);
+    window.__home_agenda = agenda;
+    window.__dls = dls;
     const top = tasks.find((t) => !t.done && t.priority === "🔴") || tasks.find((t) => !t.done);
-    const greet = profile.role === "owner" ? "Доброе утро, Иван" : profile.name.split(" ")[0];
     el("s-home").innerHTML = `
-      <div class="sub">Понедельник, 29 июня</div>
+      <div class="sub">${dateLabelToday()}</div>
       <h1 class="h">${profile.role === "owner" ? "Доброе утро,<br>Иван" : "Привет,<br>" + profile.name.split(" ")[0]}</h1>
       ${top ? `<div class="hero">
-        <div class="top"><div class="k">ГЛАВНОЕ НА СЕГОДНЯ</div><div class="v">${top.text}</div></div>
-        <div class="bot"><span class="lbl"><i class="ti ti-clock"></i> ${top.due || top.company}</span><span class="link" onclick="show('tasks')">Открыть ›</span></div>
+        <div class="top"><div class="k">ГЛАВНОЕ НА СЕГОДНЯ</div><div class="v">${esc(top.text)}</div></div>
+        <div class="bot"><span class="lbl"><i class="ti ti-clock"></i> ${esc(top.due ? fmtDue(top.due) : top.company)}</span><span class="link" onclick="show('tasks')">Открыть ›</span></div>
       </div>` : ""}
       <div class="qa-row">
-        <div class="qa" onclick="toast('Добавление — скоро')"><i class="ti ti-plus"></i>Добавить</div>
-        <div class="qa" onclick="toast('Голосовой ввод — скоро')"><i class="ti ti-microphone"></i>Голос</div>
-        <div class="qa" onclick="toast('Авто-план — скоро')"><i class="ti ti-wand"></i>Авто-план</div>
+        <div class="qa" onclick="openCreate()"><i class="ti ti-plus"></i>Добавить</div>
+        <div class="qa" onclick="openCreate({type:'rem'})"><i class="ti ti-bell"></i>Напомнить</div>
+        <div class="qa" onclick="show('week')"><i class="ti ti-calendar-week"></i>Неделя</div>
       </div>
       <div class="row spread"><div class="sec-title">Сегодня по часам</div></div>
       <div class="card" style="padding:4px 16px">
-        ${agenda.map((a) => `<div class="li"><span class="tcell">${a.time}</span><i class="ti ${a.icon}" style="color:var(--muted)"></i><span class="t" style="font-weight:500">${a.text}</span></div>`).join("")}
+        ${agenda.length ? agenda.map((a, i) => `<div class="li"><span class="chk" onclick="agendaDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${a.time}</span><span class="t" style="font-weight:500">${esc(a.text)}</span></div>`).join("") : `<div class="lbl" style="padding:12px 0">На сегодня по часам пусто</div>`}
       </div>
-      ${deadlines.length ? `<div class="sec-title">Горящие дедлайны</div>
-      <div class="dl-row">${deadlines.map((d) => `<div class="dl ${d.level}"><div class="n">${d.days}</div><div class="lbl" style="font-size:11px">дн · ${d.text}</div></div>`).join("")}</div>` : ""}
+      ${dls.length ? `<div class="sec-title">Горящие дедлайны</div>
+      <div class="card" style="padding:4px 16px">${dls.slice(0, 6).map((d) => `<div class="li" style="cursor:pointer" onclick="openDeadline(${d.i})"><span class="tcell" style="color:${d.days != null && d.days <= 7 ? "var(--red)" : d.days != null && d.days <= 21 ? "var(--amber)" : "var(--muted)"}">${d.days == null ? "—" : d.days + "д"}</span><span class="t" style="font-weight:500">${esc(d.text)}<div class="m">${d.date || ""} · нажми, чтобы изменить</div></span><i class="ti ti-pencil" style="color:#ccc"></i></div>`).join("")}</div>` : ""}
     `;
   },
 
@@ -128,7 +130,7 @@ const RENDER = {
       <div class="cal">${cells}</div>
       <div class="row spread" style="margin:16px 0 8px"><div style="font-weight:600">${dayLabel(curDay)}</div><button onclick="openCreate({type:'block', date: curDay})" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ в сетку</button></div>
       <div class="card" style="padding:6px 16px">
-        ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li" style="cursor:pointer" onclick="editItem(${i})"><span class="tcell">${it.start}</span><i class="ti ${ic(it.kind)}" style="color:var(--muted)"></i><span class="t" style="font-weight:500">${it.text}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
+        ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc;cursor:pointer" onclick="editItem(${i})"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
       ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}`;
   },
@@ -139,21 +141,22 @@ const RENDER = {
       <h1 class="h">${profile.role === "staff" ? "Мои задачи" : "Задачи"}</h1>
       <div class="seg"><b class="on" data-f="all">Все</b><b data-f="hot">Срочные</b><b data-f="done">Выполнено</b></div>
       <div class="card" id="tasklist" style="padding:6px 16px"></div>
-      <button class="btn red" style="margin-top:14px" onclick="toast('Подсказка дня — скоро')">Что делать сейчас?</button>`;
+      <div class="lbl" style="padding:8px 2px">«Срочные» — со сроком в ближайшие 7 дней. Срок задаётся при создании или по нажатию на задачу.</div>`;
     window.__tasks = tasks;
     let filter = "all";
+    const within = (due) => { if (!due) return false; const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(due + "T00:00:00"); return (d - t) / 86400000 <= 7; };
     const draw = () => {
-      const list = tasks.filter((t) => filter === "all" ? true : filter === "hot" ? !t.done && t.priority === "🔴" : t.done);
+      const list = tasks.filter((t) => filter === "done" ? t.done : !t.done && (filter === "all" ? true : within(t.due)));
       el("tasklist").innerHTML = list.length ? list.map((t) => t.done ? `
         <div class="li">
           <span class="chk done"><i class="ti ti-check" style="font-size:15px"></i></span>
-          <div class="t"><div class="done-txt">${t.text}</div></div>
+          <div class="t"><div class="done-txt">${esc(t.text)}</div></div>
           <button onclick="reopenTask('${t.id}')" title="Повторить на дату" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-rotate-clockwise"></i></button>
         </div>` : `
         <div class="li">
           <span class="chk" onclick="closeTask('${t.id}')"><i class="ti ti-check" style="font-size:15px"></i></span>
-          <div class="t" onclick="editTask('${t.id}')" style="cursor:pointer"><div>${t.text}</div><div class="m">${t.company}${t.due ? " · " + t.due : ""} · нажми, чтобы изменить</div></div>
-        </div>`).join("") : `<div class="lbl" style="padding:14px 0">${filter === "done" ? "Выполненных пока нет" : "Задач нет 🎉"}</div>`;
+          <div class="t" onclick="editTask('${t.id}')" style="cursor:pointer"><div>${esc(t.text)}</div><div class="m">${esc(t.company)}${t.due ? " · ⏰ " + fmtDue(t.due) : ""} · нажми, чтобы изменить</div></div>
+        </div>`).join("") : `<div class="lbl" style="padding:14px 0">${filter === "done" ? "Выполненных пока нет" : filter === "hot" ? "Срочных задач нет 👍" : "Задач нет 🎉"}</div>`;
     };
     draw();
     document.querySelectorAll("#s-tasks .seg b").forEach((b) => b.onclick = () => {
@@ -213,9 +216,9 @@ const RENDER = {
         <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
         ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         ${admin ? `<div class="li"><i class="ti ti-users" style="font-size:20px;color:var(--red)"></i><div class="t">Роли и доступ</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        <div class="li"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><span class="lbl">4 дня</span></div>
-        <div class="li"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
-        <div class="li"><i class="ti ti-calendar-week" style="font-size:20px;color:var(--red)"></i><div class="t">План недели</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
+        <div class="li" onclick="show('habits')"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
+        <div class="li" onclick="show('goals')"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
+        <div class="li" onclick="show('week')"><i class="ti ti-calendar-week" style="font-size:20px;color:var(--red)"></i><div class="t">План недели</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li"><i class="ti ti-logout" style="font-size:20px;color:var(--muted)"></i><div class="t" onclick="logout()">Выйти</div></div>
       </div>
       <div class="card" style="text-align:center"><div class="lbl">${profile.title}</div><div style="font-size:13px;font-weight:600;margin-top:4px">Уровень 6 · «Командир» · 820 XP</div></div>`;
@@ -252,6 +255,7 @@ function openCreate(pre) {
         <b data-t="task">Задача</b><b data-t="rem">Напом.</b><b data-t="block">В сетку</b><b data-t="note">Заметка</b>
       </div>
       <input id="ctext" placeholder="Текст…" value="${(pre.text || '').replace(/"/g, '&quot;')}">
+      <div id="cdue-wrap" style="margin-top:10px"><div class="lbl" style="margin-bottom:4px">Срок задачи (необязательно)</div><input type="date" id="cdue" value="${pre.due || ''}" style="width:100%"></div>
       <div id="cdate-wrap" style="display:flex;gap:8px;margin-top:10px">
         <input type="date" id="cdate" value="${date}" style="flex:1">
         <input type="time" id="ctime" value="${pre.start || '10:00'}" style="width:108px">
@@ -270,6 +274,7 @@ function openCreate(pre) {
 function applyCreateType(t) {
   el("cdate-wrap").style.display = (t === "task" || t === "note") ? "none" : "flex";
   el("cend").style.display = (t === "block") ? "" : "none";
+  const cd = el("cdue-wrap"); if (cd) cd.style.display = (t === "task") ? "block" : "none";
 }
 function curType() { const b = document.querySelector("#ctype b.on"); return b ? b.dataset.t : "task"; }
 function closeCreate() { el("create").classList.add("hidden"); }
@@ -278,7 +283,7 @@ async function saveCreate() {
   if (!text) { toast("Введите текст"); return; }
   const t = curType(); toast("Сохраняю…");
   let r;
-  if (t === "task") r = await API.addTask(text);
+  if (t === "task") r = await API.addTask(text, "", "🟡", el("cdue") ? el("cdue").value : "");
   else if (t === "note") r = await API.addNote(text);
   else if (t === "rem") r = await API.addReminder(el("cdate").value, el("ctime").value, text);
   else r = await API.addBlock(el("cdate").value, el("ctime").value, el("cend").value, text);
@@ -308,8 +313,11 @@ function editTask(id) {
   el("create").innerHTML = `
     <div class="sheet">
       <h3>Изменить задачу</h3>
-      <input id="etext" value="${t.text.replace(/"/g, '&quot;')}" style="margin-bottom:4px">
+      <input id="etext" value="${esc(t.text).replace(/"/g, '&quot;')}" style="margin-bottom:8px">
+      <div class="lbl" style="margin:2px 2px 6px">Срок (необязательно)</div>
+      <input type="date" id="edue" value="${t.due || ''}" style="width:100%">
       <button class="btn red" style="margin-top:14px" onclick="saveTaskEdit('${id}')">Сохранить</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeTask2('${id}')">Отметить выполненной</button>
       <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
     </div>`;
   el("create").classList.remove("hidden");
@@ -318,10 +326,12 @@ function editTask(id) {
 async function saveTaskEdit(id) {
   const t = (window.__tasks || []).find((x) => x.id === id); if (!t) return;
   const nw = (el("etext").value || "").trim(); if (!nw) { toast("Текст пустой"); return; }
+  const due = el("edue") ? el("edue").value : undefined;
   toast("Сохраняю…");
-  const r = await API.taskEdit(t.text, nw);
+  const r = await API.taskEdit(t.text, nw, due);
   closeCreate(); toast(r && r.ok !== false ? "Изменено ✓" : "Не удалось"); RENDER.tasks();
 }
+function closeTask2(id) { closeCreate(); closeTask(id); }
 
 /* ---- редактирование элемента сетки (перенос/удаление) ---- */
 function editItem(idx) {
@@ -330,13 +340,14 @@ function editItem(idx) {
   el("create").innerHTML = `
     <div class="sheet">
       <h3>Изменить</h3>
-      <div class="lbl" style="margin-bottom:12px">${it.text}</div>
+      <input id="etext" value="${esc(it.text).replace(/"/g, '&quot;')}" style="margin-bottom:8px">
       <div style="display:flex;gap:8px">
         <input type="date" id="edate" value="${curDay}" style="flex:1">
         <input type="time" id="estart" value="${it.start}" style="width:108px">
         ${it.kind === "block" ? `<input type="time" id="eend" value="${it.end || ''}" style="width:108px">` : ""}
       </div>
       <button class="btn red" style="margin-top:14px" onclick="saveEdit(${idx})">Сохранить</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();dayItemDone(${idx})">Выполнено</button>
       <button class="btn ghost" style="margin-top:8px;color:#c0392b;border-color:#e3b3b3" onclick="deleteItem(${idx})">Удалить</button>
       <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
     </div>`;
@@ -344,10 +355,19 @@ function editItem(idx) {
 }
 async function saveEdit(idx) {
   const it = (window.__dayItems || [])[idx]; if (!it) return;
+  const newText = ((el("etext") && el("etext").value) || it.text).trim() || it.text;
+  const nd = el("edate").value, ns = el("estart").value;
+  const ne = (it.kind === "block" && el("eend")) ? el("eend").value : "";
   toast("Сохраняю…");
-  const r = await API.itemMove({ kind: it.kind, date: curDay, start: it.start, text: it.text,
-    new_date: el("edate").value, new_start: el("estart").value, new_end: (it.kind === "block" && el("eend")) ? el("eend").value : "" });
-  closeCreate(); toast(r && r.ok !== false ? "Перенесено ✓" : "Не удалось"); RENDER.day();
+  let r;
+  if (newText !== it.text) {                       // текст изменился → пересоздать
+    await API.itemDelete({ kind: it.kind, date: curDay, start: it.start, text: it.text });
+    r = it.kind === "block" ? await API.addBlock(nd, ns, ne, newText) : await API.addReminder(nd, ns, newText);
+  } else {
+    r = await API.itemMove({ kind: it.kind, date: curDay, start: it.start, text: it.text,
+      new_date: nd, new_start: ns, new_end: ne });
+  }
+  closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.day();
 }
 async function deleteItem(idx) {
   const it = (window.__dayItems || [])[idx]; if (!it) return;
@@ -373,7 +393,99 @@ async function addJournal() {
   const t = (el("jtext").value || "").trim(); if (!t) return;
   toast("Записываю…");
   await API.addNote(t);
-  toast("Записал ✓"); RENDER.journal();
+  toast("Записал ✓ (сохранено в дневник, бот это видит)"); RENDER.journal();
+}
+
+/* ---- общие хелперы ---- */
+function esc(s) { return (s == null ? "" : String(s)).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+const TODAY_ISO = () => new Date().toISOString().slice(0, 10);
+function dateLabelToday() {
+  const d = new Date();
+  const wd = ["Воскресенье","Понедельник","Вторник","Среда","Четверг","Пятница","Суббота"];
+  const mo = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
+  return `${wd[d.getDay()]}, ${d.getDate()} ${mo[d.getMonth()]}`;
+}
+function fmtDue(due) { return due ? due.slice(8, 10) + "." + due.slice(5, 7) : ""; }
+
+/* ---- отметить «час» дня выполненным ---- */
+async function agendaDone(i) {
+  const a = (window.__home_agenda || [])[i]; if (!a) return;
+  toast("Отмечаю…");
+  const r = await API.itemDone({ kind: "block", date: TODAY_ISO(), start: a.time, text: a.text });
+  toast(r && r.ok !== false ? "Выполнено ✓" : "Не удалось"); RENDER.home();
+}
+async function dayItemDone(i) {
+  const it = (window.__dayItems || [])[i]; if (!it) return;
+  toast("Отмечаю…");
+  const r = await API.itemDone({ kind: it.kind, date: curDay, start: it.start, text: it.text });
+  toast(r && r.ok !== false ? "Выполнено ✓" : "Не удалось"); RENDER.day();
+}
+
+/* ---- дедлайны (редактирование) ---- */
+function openDeadline(i) {
+  const d = (window.__dls || []).find((x) => x.i === i); if (!d) return;
+  el("create").innerHTML = `
+    <div class="sheet">
+      <h3>Дедлайн</h3>
+      <input id="dltext" value="${esc(d.text).replace(/"/g, '&quot;')}" style="margin-bottom:8px">
+      <input type="date" id="dldate" value="${d.date || ''}" style="width:100%">
+      <button class="btn red" style="margin-top:14px" onclick="saveDeadline(${i})">Сохранить</button>
+      <button class="btn ghost" style="margin-top:8px;color:#c0392b;border-color:#e3b3b3" onclick="doneDeadline(${i})">Выполнено / убрать</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
+    </div>`;
+  el("create").classList.remove("hidden");
+}
+async function saveDeadline(i) {
+  toast("Сохраняю…");
+  const r = await API.deadlineEdit({ i, date: el("dldate").value, text: el("dltext").value });
+  closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.home();
+}
+async function doneDeadline(i) {
+  toast("Убираю…");
+  const r = await API.deadlineDone(i);
+  closeCreate(); toast(r && r.ok !== false ? "Готово ✓" : "Не удалось"); RENDER.home();
+}
+
+/* ---- разделы: Цели, План недели, Привычки ---- */
+RENDER.goals = async function () {
+  const g = await API.goals(profile);
+  const nf = (n) => new Intl.NumberFormat("ru-RU").format(n);
+  el("s-goals").innerHTML = `
+    <div class="link" onclick="show('more')" style="margin:8px 0;cursor:pointer">‹ Назад</div>
+    <h1 class="h">Цели и прогресс</h1>
+    <div class="card">${(g.goals || []).map((x) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div class="row spread" style="font-size:14px;font-weight:600"><span>${esc(x.name)}</span><span class="lbl">${x.pct}%</span></div><div class="bar sm"><span style="width:${x.pct}%"></span></div><div class="lbl" style="font-size:11px;margin-top:4px">осталось ${nf(x.left)} ${esc(x.unit)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Целей пока нет</div>'}</div>
+    <div class="sec-title">Рычаги дохода</div>
+    <div class="card">${(g.levers || []).map((l) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div class="row spread" style="font-size:13px;font-weight:500"><span>${esc(l.name)}</span><span class="lbl">+${Math.round(l.impact / 1000)} т</span></div><div class="bar sm"><span style="width:${l.progress}%"></span></div>${l.note ? `<div class="lbl" style="font-size:11px;margin-top:3px">${esc(l.note)}</div>` : ""}</div>`).join("") || '<div class="lbl" style="padding:10px 0">Рычагов нет</div>'}</div>`;
+};
+RENDER.week = async function () {
+  const w = await API.weekplan(profile);
+  const wd = ["вс","пн","вт","ср","чт","пт","сб"];
+  el("s-week").innerHTML = `
+    <div class="link" onclick="show('more')" style="margin:8px 0;cursor:pointer">‹ Назад</div>
+    <h1 class="h">План недели</h1>
+    ${(w.days || []).map((d) => { const dd = new Date(d.date + "T00:00:00"); const isT = d.date === TODAY_ISO(); return `<div class="sec-title" style="margin-top:12px;${isT ? "color:var(--red)" : ""}">${isT ? "● " : ""}${wd[dd.getDay()]} ${d.date.slice(8, 10)}.${d.date.slice(5, 7)}</div><div class="card" style="padding:4px 16px">${d.items.length ? d.items.map((it) => `<div class="li"><span class="tcell">${it.time}</span><span class="t" style="font-weight:500">${esc(it.text)}</span></div>`).join("") : '<div class="lbl" style="padding:8px 0">—</div>'}</div>`; }).join("")}
+    ${(w.tasks && w.tasks.length) ? `<div class="sec-title" style="margin-top:14px">Задачи со сроком на неделе</div><div class="card" style="padding:4px 16px">${w.tasks.map((t) => `<div class="li"><span class="tcell" style="color:var(--red)">${fmtDue(t.due)}</span><span class="t" style="font-weight:500">${esc(t.text)}</span></div>`).join("")}</div>` : ""}`;
+};
+RENDER.habits = async function () {
+  const h = await API.habits(profile);
+  window.__habits = h.habits || [];
+  el("s-habits").innerHTML = `
+    <div class="link" onclick="show('more')" style="margin:8px 0;cursor:pointer">‹ Назад</div>
+    <h1 class="h">Привычки и шаги</h1>
+    <div class="card" style="padding:6px 16px">${(h.habits || []).map((x, i) => `
+      <div class="li">
+        <span class="chk ${x.done_today ? "done" : ""}" onclick="markHabit(${i})" title="Отметить сегодня"><i class="ti ti-check" style="font-size:15px"></i></span>
+        <div class="t"><div style="font-weight:600">${esc(x.name)} <span class="lbl" style="font-weight:400">· серия ${x.streak} дн</span></div>
+        <div class="m">${esc(x.goal || "")}${x.anchor ? " · " + esc(x.anchor) : ""}</div>
+        <div style="font-size:15px;letter-spacing:2px;margin-top:3px;color:var(--red)">${x.chain.map((c) => c ? "▰" : "▱").join("")} <span class="lbl" style="font-size:11px;color:var(--muted)">${x.week}/7</span></div></div>
+      </div>`).join("") || '<div class="lbl" style="padding:12px 0">Привычки не заданы. Скажи боту: «новая привычка: 5 приседаний перед душем».</div>'}</div>
+    <div class="lbl" style="padding:8px 2px">Отмечай галочкой каждый день — расти серию, не разрывай цепь 💪</div>`;
+};
+async function markHabit(i) {
+  const x = (window.__habits || [])[i]; if (!x) return;
+  toast("Отмечаю…");
+  const r = await API.habitDone(x.name);
+  toast(r && r.ok !== false ? "Отмечено ✓" : "Не удалось"); RENDER.habits();
 }
 
 /* ---- пуш-уведомления ---- */

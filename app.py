@@ -910,6 +910,60 @@ def habit_done(b: HabitDone):
     return {"ok": gh_write("state/habits.json", json.dumps(log, ensure_ascii=False, indent=2), "app: привычка отмечена")}
 
 
+# ---------- большие цели (год/месяц) ----------
+@app.get("/api/biggoals")
+def biggoals(user: str = ""):
+    g = load_json("state/big_goals.json", [])
+    order = {"open": 0, "done": 1, "miss": 2}
+    return sorted(g, key=lambda x: (order.get(x.get("status", "open"), 0),
+                                    0 if x.get("scope") == "year" else 1,
+                                    x.get("period", "")), reverse=False)
+
+
+class BGAdd(BaseModel):
+    scope: str = "year"
+    period: str = ""
+    text: str = ""
+
+
+@app.post("/api/biggoals/add")
+def biggoal_add(b: BGAdd):
+    import uuid
+    g = load_json("state/big_goals.json", [])
+    g.append({"id": uuid.uuid4().hex[:8], "scope": b.scope, "period": b.period,
+              "text": b.text.strip(), "status": "open", "ts": dt.date.today().isoformat()})
+    return {"ok": gh_write("state/big_goals.json", json.dumps(g, ensure_ascii=False, indent=2), "app: большая цель")}
+
+
+class BGStatus(BaseModel):
+    id: str
+    status: str
+
+
+@app.post("/api/biggoals/status")
+def biggoal_status(b: BGStatus):
+    g = load_json("state/big_goals.json", [])
+    hit = False
+    for x in g:
+        if x.get("id") == b.id:
+            x["status"] = b.status
+            hit = True
+            break
+    if not hit:
+        return {"ok": False}
+    return {"ok": gh_write("state/big_goals.json", json.dumps(g, ensure_ascii=False, indent=2), "app: статус цели")}
+
+
+class BGDel(BaseModel):
+    id: str
+
+
+@app.post("/api/biggoals/delete")
+def biggoal_delete(b: BGDel):
+    g = [x for x in load_json("state/big_goals.json", []) if x.get("id") != b.id]
+    return {"ok": gh_write("state/big_goals.json", json.dumps(g, ensure_ascii=False, indent=2), "app: цель удалена")}
+
+
 # ---------- статика PWA ----------
 if os.path.isdir(WEB):
     app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

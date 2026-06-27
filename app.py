@@ -605,7 +605,17 @@ def day(user: str = "", date: str = ""):
         cur = max(cur, e)
     if cur < we:
         free.append(f"{cur//60:02d}:{cur%60:02d}–22:00")
-    return {"date": d, "items": items, "free": free}
+    # выполненные за этот день (из сетки и напоминаний) — для разбора «что сделано»
+    done_items = []
+    for a in load_json("state/agenda.json", []):
+        if a.get("date") == d and a.get("start") and a.get("done"):
+            done_items.append({"start": a["start"], "text": a.get("text", ""), "kind": "block"})
+    for r in load_json("state/reminders.json", []):
+        w = r.get("when", "")
+        if r.get("done") and len(w) >= 16 and w[:10] == d and "T" in w:
+            done_items.append({"start": w[11:16], "text": r.get("text", ""), "kind": "rem"})
+    done_items.sort(key=lambda x: x["start"])
+    return {"date": d, "items": items, "free": free, "done": done_items}
 
 
 @app.get("/api/push/key")

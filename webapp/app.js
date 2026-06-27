@@ -132,7 +132,9 @@ const RENDER = {
       <div class="card" style="padding:6px 16px">
         ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc;cursor:pointer" onclick="editItem(${i})"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
-      ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}`;
+      ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}
+      ${dd.done && dd.done.length ? `<div class="sec-title" style="margin-top:10px">✓ Выполнено в этот день (${dd.done.length})</div>
+      <div class="card" style="padding:4px 16px">${dd.done.map((it) => `<div class="li"><span class="chk done"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}</span></div>`).join("")}</div>` : ""}`;
   },
 
   async tasks() {
@@ -447,16 +449,61 @@ async function doneDeadline(i) {
 }
 
 /* ---- разделы: Цели, План недели, Привычки ---- */
+function bgPill(s) {
+  return s === "done" ? '<span class="badge" style="color:#2E7D32">✓ достигнуто</span>'
+    : s === "miss" ? '<span class="badge red">✗ не вышло</span>'
+    : '<span class="lbl">в работе</span>';
+}
 RENDER.goals = async function () {
-  const g = await API.goals(profile);
+  const g = await API.goals(profile).catch(() => ({ goals: [], levers: [] }));
+  const bg = await API.bigGoals(profile).catch(() => []);
+  window.__bg = bg;
   const nf = (n) => new Intl.NumberFormat("ru-RU").format(n);
   el("s-goals").innerHTML = `
     <div class="link" onclick="show('more')" style="margin:8px 0;cursor:pointer">‹ Назад</div>
     <h1 class="h">Цели и прогресс</h1>
+    <div class="row spread"><div class="sec-title">🎯 Мои большие цели</div><span class="link" onclick="addBigGoal()" style="cursor:pointer">＋ цель</span></div>
+    <div class="card" style="padding:6px 16px">${bg.length ? bg.map((x) => `<div class="li"><div class="t" onclick="cycleBigGoal('${x.id}')" style="cursor:pointer"><div style="font-weight:500${x.status === "done" ? ";text-decoration:line-through;color:#aaa" : ""}">${esc(x.text)}</div><div class="m">${x.scope === "year" ? "Год" : "Месяц"} ${esc(x.period)} · ${bgPill(x.status)} · нажми — сменить статус</div></div><button onclick="delBigGoal('${x.id}')" title="Удалить" style="border:none;background:none;color:#ccc;cursor:pointer;font-size:18px"><i class="ti ti-x"></i></button></div>`).join("") : '<div class="lbl" style="padding:10px 0">Пока нет. Поставь большие цели на год/месяц — в конце периода увидишь, что удалось.</div>'}</div>
+    <div class="sec-title">Стратегические цели (числа)</div>
     <div class="card">${(g.goals || []).map((x) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div class="row spread" style="font-size:14px;font-weight:600"><span>${esc(x.name)}</span><span class="lbl">${x.pct}%</span></div><div class="bar sm"><span style="width:${x.pct}%"></span></div><div class="lbl" style="font-size:11px;margin-top:4px">осталось ${nf(x.left)} ${esc(x.unit)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Целей пока нет</div>'}</div>
     <div class="sec-title">Рычаги дохода</div>
     <div class="card">${(g.levers || []).map((l) => `<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div class="row spread" style="font-size:13px;font-weight:500"><span>${esc(l.name)}</span><span class="lbl">+${Math.round(l.impact / 1000)} т</span></div><div class="bar sm"><span style="width:${l.progress}%"></span></div>${l.note ? `<div class="lbl" style="font-size:11px;margin-top:3px">${esc(l.note)}</div>` : ""}</div>`).join("") || '<div class="lbl" style="padding:10px 0">Рычагов нет</div>'}</div>`;
 };
+function addBigGoal() {
+  const y = new Date().getFullYear();
+  const ym = new Date().toISOString().slice(0, 7);
+  el("create").innerHTML = `
+    <div class="sheet">
+      <h3>Большая цель</h3>
+      <input id="bgtext" placeholder="Например: запустить 3 новых потока выручки" style="margin-bottom:10px">
+      <div class="seg" id="bgscope"><b class="on" data-s="year">На год (${y})</b><b data-s="month">На месяц (${ym})</b></div>
+      <button class="btn red" style="margin-top:14px" onclick="saveBigGoal()">Добавить</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
+    </div>`;
+  el("create").classList.remove("hidden");
+  document.querySelectorAll("#bgscope b").forEach((b) => b.onclick = () => { document.querySelectorAll("#bgscope b").forEach((x) => x.classList.remove("on")); b.classList.add("on"); });
+  setTimeout(() => { const i = el("bgtext"); if (i) i.focus(); }, 50);
+}
+async function saveBigGoal() {
+  const t = (el("bgtext").value || "").trim(); if (!t) { toast("Введите цель"); return; }
+  const sb = document.querySelector("#bgscope b.on"); const scope = sb ? sb.dataset.s : "year";
+  const period = scope === "year" ? String(new Date().getFullYear()) : new Date().toISOString().slice(0, 7);
+  toast("Добавляю…");
+  const r = await API.bigGoalAdd({ scope, period, text: t });
+  closeCreate(); toast(r && r.ok !== false ? "Добавлено ✓" : "Не удалось"); RENDER.goals();
+}
+async function cycleBigGoal(id) {
+  const x = (window.__bg || []).find((z) => z.id === id); if (!x) return;
+  const nx = x.status === "open" ? "done" : x.status === "done" ? "miss" : "open";
+  toast("Меняю…");
+  const r = await API.bigGoalStatus(id, nx);
+  toast(r && r.ok !== false ? ({ done: "Достигнуто ✓", miss: "Не вышло", open: "В работе" })[nx] : "Не удалось"); RENDER.goals();
+}
+async function delBigGoal(id) {
+  toast("Удаляю…");
+  const r = await API.bigGoalDelete(id);
+  toast(r && r.ok !== false ? "Удалено ✓" : "Не удалось"); RENDER.goals();
+}
 RENDER.week = async function () {
   const w = await API.weekplan(profile);
   const wd = ["вс","пн","вт","ср","чт","пт","сб"];

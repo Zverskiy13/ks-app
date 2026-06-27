@@ -145,6 +145,10 @@ const API = {
   weekplan(profile) { return USE_REMOTE ? this._get("weekplan", profile) : Promise.resolve({ days: [], tasks: [] }); },
   habits(profile) { return USE_REMOTE ? this._get("habits", profile) : Promise.resolve({ habits: [] }); },
   habitDone(habit) { return this._post("habits/done", { habit }); },
+  bigGoals(profile) { return USE_REMOTE ? this._get("biggoals", profile) : Promise.resolve([]); },
+  bigGoalAdd(p) { return this._post("biggoals/add", p); },
+  bigGoalStatus(id, status) { return this._post("biggoals/status", { id, status }); },
+  bigGoalDelete(id) { return this._post("biggoals/delete", { id }); },
   async journal(limit) {
     if (USE_REMOTE) return fetch(`${API_BASE}/journal?limit=${limit || 50}`).then(r => r.json());
     return { entries: [] };

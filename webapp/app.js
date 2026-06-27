@@ -100,8 +100,8 @@ const RENDER = {
       </div>` : ""}
       <div class="qa-row">
         <div class="qa" onclick="openCreate()"><i class="ti ti-plus"></i>Добавить</div>
-        <div class="qa" onclick="openCreate({type:'rem'})"><i class="ti ti-bell"></i>Напомнить</div>
-        <div class="qa" onclick="show('week')"><i class="ti ti-calendar-week"></i>Неделя</div>
+        <div class="qa" onclick="startVoice()"><i class="ti ti-microphone"></i>Голос</div>
+        <div class="qa" onclick="scanDoc()"><i class="ti ti-camera"></i>Документ</div>
       </div>
       <div class="row spread"><div class="sec-title">Сегодня по часам</div></div>
       <div class="card" style="padding:4px 16px">
@@ -536,6 +536,7 @@ RENDER.group = async function () {
       <div class="lbl">Твой доход (с учётом долей): <b style="color:var(--ink)">${nf(d.owner_income)} ₽</b></div></div>
     <div class="card" style="padding:6px 16px">${(d.rows || []).map((r) => `<div class="li"><div class="t"><div style="font-weight:700">${esc(r.name)}${r.share && r.share !== 1 ? ` <span class="lbl" style="font-weight:400">· доля ${Math.round(r.share * 100)}%</span>` : ""}</div><div class="m">${r.profit == null ? "нет данных за месяц" : dlt(r.profit, r.prev)}</div></div><div style="font-weight:800">${r.profit == null ? "—" : nf(r.profit)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Направлений нет</div>'}</div>
     <button class="btn red" onclick="openGroupForm()">Внести / изменить за ${ymLabel(d.ym)}</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="scanFinance()"><i class="ti ti-camera" style="margin-right:6px"></i>Распознать отчёт фото/PDF</button>
     ${(d.trend && d.trend.length > 1) ? `<div class="sec-title" style="margin-top:16px">Динамика группы</div><div class="card" style="padding:6px 16px">${d.trend.map((t) => `<div class="li"><span class="t">${ymLabel(t.ym)}</span><span style="font-weight:700">${nf(t.total)} ₽</span></div>`).join("")}</div>` : ""}
     <div class="lbl" style="padding:8px 2px">Пока вносишь вручную. Позже подключим интеграцию — цифры будут обновляться сами.</div>`;
 };
@@ -567,6 +568,86 @@ async function saveGroupForm() {
   toast("Сохраняю…");
   const r = await API.groupSave(d.ym, rows);
   closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.group();
+}
+
+/* ---- голос → текст ---- */
+function _toB64(blobOrFile) { return new Promise((res) => { const r = new FileReader(); r.onloadend = () => res(r.result); r.readAsDataURL(blobOrFile); }); }
+let _rec = null, _chunks = [];
+async function startVoice() {
+  if (!navigator.mediaDevices || !window.MediaRecorder) { toast("Запись голоса не поддерживается на этом устройстве"); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _chunks = [];
+    _rec = new MediaRecorder(stream);
+    _rec.ondataavailable = (e) => { if (e.data && e.data.size) _chunks.push(e.data); };
+    _rec.onstop = async () => {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+      const mime = _rec.mimeType || "audio/webm";
+      const blob = new Blob(_chunks, { type: mime });
+      el("create").innerHTML = `<div class="sheet"><h3>Распознаю…</h3><div class="lbl">Секунду, отправляю запись.</div></div>`;
+      el("create").classList.remove("hidden");
+      const b64 = await _toB64(blob);
+      const r = await API.stt(b64, mime);
+      closeCreate();
+      if (r && r.ok && r.text) { openCreate({ type: "task", text: r.text }); toast("Готово — проверь и сохрани"); }
+      else { toast("Не распозналось" + (r && r.error ? ": " + r.error : "")); }
+    };
+    _rec.start();
+    el("create").innerHTML = `<div class="sheet"><h3>🎤 Запись…</h3><div class="lbl" style="margin-bottom:14px">Говори, потом нажми «Стоп».</div><button class="btn red" onclick="stopVoice()">■ Стоп и распознать</button><button class="btn ghost" style="margin-top:8px" onclick="cancelVoice()">Отмена</button></div>`;
+    el("create").classList.remove("hidden");
+  } catch (e) { toast("Нет доступа к микрофону. Разреши доступ в настройках."); }
+}
+function stopVoice() { try { if (_rec && _rec.state !== "inactive") _rec.stop(); } catch (e) {} }
+function cancelVoice() { try { if (_rec && _rec.state !== "inactive") { _rec.onstop = null; const s = _rec.stream; _rec.stop(); if (s) s.getTracks().forEach((t) => t.stop()); } } catch (e) {} closeCreate(); }
+
+/* ---- документы → текст / финансы ---- */
+function _pickFile(cb, accept) {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = accept || "image/*,application/pdf";
+  inp.onchange = () => { const f = inp.files && inp.files[0]; if (f) cb(f); };
+  inp.click();
+}
+function scanDoc() {
+  _pickFile(async (f) => {
+    el("create").innerHTML = `<div class="sheet"><h3>Распознаю документ…</h3><div class="lbl">Отправляю на сервер, это пару секунд.</div></div>`;
+    el("create").classList.remove("hidden");
+    const b64 = await _toB64(f);
+    const r = await API.vision(b64, f.type || "image/jpeg", "text");
+    if (r && r.ok && r.text) { window.__doctext = r.text; openDocText(r.text); }
+    else { closeCreate(); toast("Не вышло" + (r && r.error ? ": " + r.error : "")); }
+  });
+}
+function openDocText(t) {
+  window.__doctext = t;
+  el("create").innerHTML = `<div class="sheet"><h3>Документ распознан</h3>
+    <div class="card" style="max-height:230px;overflow:auto;margin-bottom:10px"><div style="font-size:13px;white-space:pre-wrap">${esc(t)}</div></div>
+    <button class="btn red" onclick="saveDocNote()">Сохранить в дневник</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Закрыть</button></div>`;
+  el("create").classList.remove("hidden");
+}
+async function saveDocNote() {
+  const t = window.__doctext || ""; if (!t) { closeCreate(); return; }
+  toast("Сохраняю…"); await API.addNote("📄 " + t);
+  closeCreate(); toast("Сохранено в дневник ✓");
+}
+function scanFinance() {
+  _pickFile(async (f) => {
+    el("create").innerHTML = `<div class="sheet"><h3>Распознаю отчёт…</h3><div class="lbl">Секунду.</div></div>`;
+    el("create").classList.remove("hidden");
+    const b64 = await _toB64(f);
+    const r = await API.vision(b64, f.type || "image/jpeg", "finance");
+    closeCreate();
+    if (!(r && r.ok && r.text)) { toast("Не вышло" + (r && r.error ? ": " + r.error : "")); return; }
+    let p; try { p = JSON.parse(r.text.replace(/```json|```/g, "").trim()); } catch (e) { openDocText(r.text); toast("Цифры не распознались структурно — вот текст"); return; }
+    openGroupForm();
+    const d = window.__group || { rows: [] };
+    (p.rows || []).forEach((pr) => {
+      const key = (pr.name || "").toLowerCase().slice(0, 5);
+      const idx = (d.rows || []).findIndex((rr) => rr.name.toLowerCase().includes(key) || (pr.name || "").toLowerCase().includes(rr.name.toLowerCase().slice(0, 5)));
+      if (idx >= 0 && pr.profit != null && el("gp" + idx)) el("gp" + idx).value = pr.profit;
+    });
+    toast("Подставил из отчёта — проверь и сохрани");
+  });
 }
 RENDER.week = async function () {
   const w = await API.weekplan(profile);

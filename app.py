@@ -1048,6 +1048,76 @@ def group_save(b: GroupSave):
     return {"ok": ok1 and ok2}
 
 
+# ---------- голос → текст (Whisper) ----------
+class STT(BaseModel):
+    audio_b64: str
+    mime: str = "audio/webm"
+
+
+@app.post("/api/stt")
+def stt(b: STT):
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not key:
+        return {"ok": False, "error": "OPENAI_API_KEY не задан на сервере"}
+    try:
+        raw = base64.b64decode(b.audio_b64.split(",")[-1])
+    except Exception:
+        return {"ok": False, "error": "битый звук"}
+    m = (b.mime or "").lower()
+    ext = "webm" if "webm" in m else ("m4a" if ("mp4" in m or "m4a" in m or "aac" in m) else ("ogg" if "ogg" in m else "wav"))
+    try:
+        r = requests.post("https://api.openai.com/v1/audio/transcriptions",
+                          headers={"Authorization": f"Bearer {key}"},
+                          files={"file": (f"audio.{ext}", raw, b.mime or "audio/webm")},
+                          data={"model": "whisper-1", "language": "ru"}, timeout=120)
+        if r.status_code == 200:
+            return {"ok": True, "text": (r.json().get("text") or "").strip()}
+        return {"ok": False, "error": f"whisper {r.status_code}: {r.text[:160]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:160]}
+
+
+# ---------- документы → текст / финансы (Claude Vision) ----------
+class Vision(BaseModel):
+    image_b64: str
+    mime: str = "image/jpeg"
+    mode: str = "text"     # "text" — извлечь суть; "finance" — прибыль по направлениям в JSON
+
+
+@app.post("/api/vision")
+def vision(b: Vision):
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    data = b.image_b64.split(",")[-1]
+    is_pdf = "pdf" in (b.mime or "").lower()
+    if b.mode == "finance":
+        prompt = ("На изображении/в документе — финансовый отчёт по направлениям компании. "
+                  "Верни СТРОГО JSON без пояснений и без markdown: "
+                  '{"period":"YYYY-MM или пусто","rows":[{"name":"направление","profit":число_рублей_без_пробелов}]}. '
+                  "profit — чистая прибыль за месяц (если есть только выручка и расходы — посчитай прибыль). "
+                  "Названия направлений бери как в отчёте.")
+    else:
+        prompt = ("Извлеки суть документа кратко на русском: что это, ключевые суммы, даты, стороны, главное. "
+                  "Без воды, до 8 строк.")
+    if is_pdf:
+        src = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}}
+    else:
+        src = {"type": "image", "source": {"type": "base64", "media_type": b.mime or "image/jpeg", "data": data}}
+    body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1500,
+            "messages": [{"role": "user", "content": [src, {"type": "text", "text": prompt}]}]}
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages",
+                          headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                          json=body, timeout=120)
+        if r.status_code == 200:
+            txt = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+            return {"ok": True, "text": txt.strip()}
+        return {"ok": False, "error": f"claude {r.status_code}: {r.text[:160]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:160]}
+
+
 # ---------- статика PWA ----------
 if os.path.isdir(WEB):
     app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

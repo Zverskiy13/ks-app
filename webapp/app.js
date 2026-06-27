@@ -83,9 +83,17 @@ const RENDER = {
     window.__home_agenda = agenda;
     window.__dls = dls;
     const top = tasks.find((t) => !t.done && t.priority === "🔴") || tasks.find((t) => !t.done);
+    const openCount = tasks.filter((t) => !t.done).length;
+    const hotDls = dls.filter((d) => d.days != null && d.days <= 14).length;
+    const directorText = top ? `Фокус дня — ${esc(top.text)}. ${hotDls ? `Горящих дедлайнов: ${hotDls}.` : "Критичных дедлайнов нет."}` : (hotDls ? `Нет главной задачи, но есть ${hotDls} горящих дедлайнов.` : "Критичных рисков на сегодня не вижу.");
     el("s-home").innerHTML = `
       <div class="sub">${dateLabelToday()}</div>
-      <h1 class="h">${profile.role === "owner" ? "Доброе утро,<br>Иван" : "Привет,<br>" + profile.name.split(" ")[0]}</h1>
+      <h1 class="h">${profile.role === "owner" ? "Панель<br>управления" : "Привет,<br>" + profile.name.split(" ")[0]}</h1>
+      ${profile.role === "owner" ? `<div class="director-note"><div class="k">AI-ДИРЕКТОР</div><div class="v">${directorText}</div></div>
+      <div class="board-pulse">
+        <div class="pulse-card"><div class="k">Открыто задач</div><div class="n">${openCount}</div><div class="m">в работе</div></div>
+        <div class="pulse-card ${hotDls ? "hot" : ""}"><div class="k">Дедлайны</div><div class="n">${hotDls}</div><div class="m">до 14 дней</div></div>
+      </div>` : ""}
       ${top ? `<div class="hero">
         <div class="top"><div class="k">ГЛАВНОЕ НА СЕГОДНЯ</div><div class="v">${esc(top.text)}</div></div>
         <div class="bot"><span class="lbl"><i class="ti ti-clock"></i> ${esc(top.due ? fmtDue(top.due) : top.company)}</span><span class="link" onclick="show('tasks')">Открыть ›</span></div>

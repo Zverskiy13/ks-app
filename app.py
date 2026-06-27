@@ -844,9 +844,27 @@ def weekplan(user: str = ""):
         items.sort(key=lambda x: x["time"])
         days.append({"date": iso, "items": items})
     tasks = parse_tasks(gh_read("state/tasks.md") or "")
-    end = (today + dt.timedelta(days=6)).isoformat()
-    wt = [t for t in tasks if not t["done"] and t["due"] and today.isoformat() <= t["due"] <= end]
-    return {"days": days, "tasks": wt}
+    tdy = today.isoformat()
+    # задачи со сроком — кладём под свой день
+    for d in days:
+        for t in tasks:
+            if not t["done"] and t.get("due") == d["date"]:
+                d["items"].append({"time": "", "text": t["text"], "kind": "task"})
+        d["items"].sort(key=lambda x: (x["time"] == "", x["time"]))
+    # просроченные (дата в прошлом, не выполнено) — предложим перенести
+    overdue = []
+    for t in tasks:
+        if not t["done"] and t.get("due") and t["due"] < tdy:
+            overdue.append({"kind": "task", "text": t["text"], "date": t["due"]})
+    for a in ag:
+        if a.get("start") and not a.get("done") and a.get("date") and a["date"] < tdy:
+            overdue.append({"kind": "block", "date": a["date"], "start": a["start"], "text": a.get("text", "")})
+    for r in rems:
+        w = r.get("when", "")
+        if not r.get("done") and "T" in w and len(w) >= 16 and w[:10] < tdy:
+            overdue.append({"kind": "rem", "date": w[:10], "start": w[11:16], "text": r.get("text", "")})
+    overdue.sort(key=lambda x: x.get("date", ""))
+    return {"days": days, "overdue": overdue}
 
 
 # ---------- привычки и шаги ----------

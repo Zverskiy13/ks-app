@@ -651,13 +651,37 @@ function scanFinance() {
 }
 RENDER.week = async function () {
   const w = await API.weekplan(profile);
+  window.__overdue = w.overdue || [];
   const wd = ["вс","пн","вт","ср","чт","пт","сб"];
+  const itemRow = (it) => `<div class="li"><span class="tcell">${it.kind === "task" ? '<i class="ti ti-circle-check" style="color:var(--red)"></i>' : (it.time || "")}</span><span class="t" style="font-weight:500">${esc(it.text)}</span></div>`;
   el("s-week").innerHTML = `
     <div class="link" onclick="show('more')" style="margin:8px 0;cursor:pointer">‹ Назад</div>
     <h1 class="h">План недели</h1>
-    ${(w.days || []).map((d) => { const dd = new Date(d.date + "T00:00:00"); const isT = d.date === TODAY_ISO(); return `<div class="sec-title" style="margin-top:12px;${isT ? "color:var(--red)" : ""}">${isT ? "● " : ""}${wd[dd.getDay()]} ${d.date.slice(8, 10)}.${d.date.slice(5, 7)}</div><div class="card" style="padding:4px 16px">${d.items.length ? d.items.map((it) => `<div class="li"><span class="tcell">${it.time}</span><span class="t" style="font-weight:500">${esc(it.text)}</span></div>`).join("") : '<div class="lbl" style="padding:8px 0">—</div>'}</div>`; }).join("")}
-    ${(w.tasks && w.tasks.length) ? `<div class="sec-title" style="margin-top:14px">Задачи со сроком на неделе</div><div class="card" style="padding:4px 16px">${w.tasks.map((t) => `<div class="li"><span class="tcell" style="color:var(--red)">${fmtDue(t.due)}</span><span class="t" style="font-weight:500">${esc(t.text)}</span></div>`).join("")}</div>` : ""}`;
+    ${(w.overdue && w.overdue.length) ? `<div class="sec-title" style="color:#C0392B">⚠️ Просрочено (${w.overdue.length})</div>
+    <div class="card" style="padding:6px 16px">${w.overdue.map((o, i) => `<div class="li"><div class="t"><div style="font-weight:600">${esc(o.text)}</div><div class="m">было ${o.date.slice(8, 10)}.${o.date.slice(5, 7)} · ${o.kind === "task" ? "задача" : o.kind === "rem" ? "напоминание" : "в сетке"}</div></div><button onclick="rescheduleOverdue(${i})" style="border:1px solid var(--line,#eee);background:#fff;border-radius:10px;padding:7px 10px;color:var(--red);font-weight:700;cursor:pointer">Перенести</button></div>`).join("")}</div>` : ""}
+    ${(w.days || []).map((d) => { const dd = new Date(d.date + "T00:00:00"); const isT = d.date === TODAY_ISO(); return `<div class="sec-title" style="margin-top:12px;${isT ? "color:var(--red)" : ""}">${isT ? "● " : ""}${wd[dd.getDay()]} ${d.date.slice(8, 10)}.${d.date.slice(5, 7)}</div><div class="card" style="padding:4px 16px">${d.items.length ? d.items.map(itemRow).join("") : '<div class="lbl" style="padding:8px 0">—</div>'}</div>`; }).join("")}`;
 };
+function rescheduleOverdue(i) {
+  const o = (window.__overdue || [])[i]; if (!o) return;
+  const tom = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  el("create").innerHTML = `<div class="sheet"><h3>Перенести</h3>
+    <div class="lbl" style="margin-bottom:10px">${esc(o.text)}</div>
+    <input type="date" id="rsd" value="${tom}" style="width:100%">
+    <button class="btn red" style="margin-top:14px" onclick="doReschedule(${i})">Перенести на выбранную дату</button>
+    <div style="display:flex;gap:8px;margin-top:8px"><button class="btn ghost" style="flex:1" onclick="quickResched(${i},1)">Завтра</button><button class="btn ghost" style="flex:1" onclick="quickResched(${i},7)">+7 дней</button></div>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function quickResched(i, days) { const inp = el("rsd"); if (inp) inp.value = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10); doReschedule(i); }
+async function doReschedule(i) {
+  const o = (window.__overdue || [])[i]; if (!o) return;
+  const nd = el("rsd") ? el("rsd").value : ""; if (!nd) { toast("Выбери дату"); return; }
+  toast("Переношу…");
+  let r;
+  if (o.kind === "task") r = await API.taskEdit(o.text, o.text, nd);
+  else r = await API.itemMove({ kind: o.kind, date: o.date, start: o.start, text: o.text, new_date: nd, new_start: o.start, new_end: "" });
+  closeCreate(); toast(r && r.ok !== false ? "Перенесено ✓" : "Не удалось"); RENDER.week();
+}
 RENDER.habits = async function () {
   const h = await API.habits(profile);
   window.__habits = h.habits || [];

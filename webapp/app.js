@@ -77,9 +77,8 @@ function show(s) {
 /* ---------- renderers ---------- */
 const RENDER = {
   async home() {
-    const { agenda } = await API.today(profile);
-    const tasks = await API.tasks(profile);
-    const dls = await API.deadlines(profile);
+    const H = await API.home(profile).catch(() => ({ agenda: [], deadlines: [], tasks: [] }));
+    const agenda = H.agenda || [], tasks = H.tasks || [], dls = H.deadlines || [];
     window.__home_agenda = agenda;
     window.__dls = dls;
     const top = tasks.find((t) => !t.done && t.priority === "🔴") || tasks.find((t) => !t.done);
@@ -273,7 +272,8 @@ function openCreate(pre) {
         <input type="time" id="cend" value="${pre.end || ''}" style="width:108px">
       </div>
       <button class="btn red" style="margin-top:14px" onclick="saveCreate()">Сохранить</button>
-      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
+      <div class="link" style="text-align:center;margin-top:10px;cursor:pointer" onclick="brainFromCreate()">🧠 Разобрать умно (несколько дел сразу)</div>
+      <button class="btn ghost" style="margin-top:10px" onclick="closeCreate()">Отмена</button>
     </div>`;
   el("create").classList.remove("hidden");
   document.querySelectorAll("#ctype b").forEach((b) => {
@@ -589,7 +589,7 @@ async function startVoice() {
       const b64 = await _toB64(blob);
       const r = await API.stt(b64, mime);
       closeCreate();
-      if (r && r.ok && r.text) { openCreate({ type: "task", text: r.text }); toast("Готово — проверь и сохрани"); }
+      if (r && r.ok && r.text) { voiceResult(r.text); }
       else { toast("Не распозналось" + (r && r.error ? ": " + r.error : "")); }
     };
     _rec.start();
@@ -599,6 +599,32 @@ async function startVoice() {
 }
 function stopVoice() { try { if (_rec && _rec.state !== "inactive") _rec.stop(); } catch (e) {} }
 function cancelVoice() { try { if (_rec && _rec.state !== "inactive") { _rec.onstop = null; const s = _rec.stream; _rec.stop(); if (s) s.getTracks().forEach((t) => t.stop()); } } catch (e) {} closeCreate(); }
+function voiceResult(text) {
+  el("create").innerHTML = `<div class="sheet">
+    <h3>Распознано</h3>
+    <input id="vrtext" value="${esc(text).replace(/"/g, '&quot;')}" style="margin-bottom:10px">
+    <button class="btn red" onclick="smartParse()">🧠 Разобрать и выполнить</button>
+    <div style="display:flex;gap:8px;margin-top:8px"><button class="btn ghost" style="flex:1" onclick="vrAs('task')">Задача</button><button class="btn ghost" style="flex:1" onclick="vrAs('note')">Заметка</button></div>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function vrAs(type) { const t = (el("vrtext") ? el("vrtext").value : "").trim(); closeCreate(); openCreate({ type, text: t }); }
+async function smartParse() {
+  const t = (el("vrtext") ? el("vrtext").value : "").trim(); if (!t) return;
+  await runBrain(t);
+}
+async function brainFromCreate() {
+  const t = (el("ctext") ? el("ctext").value : "").trim(); if (!t) { toast("Введите текст"); return; }
+  await runBrain(t);
+}
+async function runBrain(t) {
+  toast("Разбираю…");
+  const r = await API.brain(t);
+  closeCreate();
+  toast(r && r.ok ? (r.summary || "Готово ✓") : ("Не вышло" + (r && r.error ? ": " + r.error : "")));
+  const a = document.querySelector("#nav button.on"); const s = a ? a.dataset.s : "home";
+  if (RENDER[s]) RENDER[s]();
+}
 
 /* ---- документы → текст / финансы ---- */
 function _pickFile(cb, accept) {

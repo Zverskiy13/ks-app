@@ -74,14 +74,25 @@ app = FastAPI(title="Клиники Столицы")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def gh_read(path):
+_GH_CACHE = {}        # path -> (text, ts)
+_GH_TTL = 25          # сек: чтения из памяти, без обращения к GitHub
+
+
+def gh_read(path, fresh=False):
+    now = _time.time()
+    if not fresh:
+        c = _GH_CACHE.get(path)
+        if c and (now - c[1]) < _GH_TTL:
+            return c[0]
     if not (GH_TOKEN and GH_REPO):
         return None
     try:
         r = requests.get(f"https://api.github.com/repos/{GH_REPO}/contents/{path}?ref={GH_BRANCH}",
                          headers={"Authorization": f"token {GH_TOKEN}"}, timeout=15)
         if r.status_code == 200:
-            return base64.b64decode(r.json()["content"]).decode("utf-8")
+            txt = base64.b64decode(r.json()["content"]).decode("utf-8")
+            _GH_CACHE[path] = (txt, now)
+            return txt
     except Exception:
         pass
     return None
@@ -114,7 +125,10 @@ def gh_write(path, content, message):
         body["sha"] = sha
     try:
         pr = requests.put(url, headers=h, json=body, timeout=20)
-        return pr.status_code in (200, 201)
+        ok = pr.status_code in (200, 201)
+        if ok:
+            _GH_CACHE[path] = (content, _time.time())   # сразу кладём свежее в кэш
+        return ok
     except Exception:
         return False
 
@@ -1134,6 +1148,115 @@ def vision(b: Vision):
         return {"ok": False, "error": f"claude {r.status_code}: {r.text[:160]}"}
     except Exception as e:
         return {"ok": False, "error": str(e)[:160]}
+
+
+# ---------- объединённый главный экран (1 запрос вместо 3) ----------
+@app.get("/api/home")
+def home_combined(user: str = ""):
+    return {"agenda": today(user)["agenda"], "deadlines": deadlines_list(user), "tasks": tasks(user)}
+
+
+# ---------- умный разбор: текст/голос → действия (Claude) ----------
+class BrainIn(BaseModel):
+    text: str
+
+
+@app.post("/api/brain")
+def brain_parse(b: BrainIn):
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    text = (b.text or "").strip()
+    if not text:
+        return {"ok": False, "error": "пусто"}
+    today_iso = dt.date.today().isoformat()
+    prompt = (
+        f"Ты ассистент-планировщик. Сегодня {today_iso} (формат YYYY-MM-DD). "
+        "Разбери сообщение владельца на конкретные действия и верни СТРОГО JSON без markdown и пояснений: "
+        '{"actions":[...]}. Допустимые элементы actions: '
+        '{"type":"task","text":"...","due":"YYYY-MM-DD"(опц),"priority":"🔴"|"🟡"|"🟢"(опц)}; '
+        '{"type":"reminder","date":"YYYY-MM-DD","time":"HH:MM","text":"..."}; '
+        '{"type":"block","date":"YYYY-MM-DD","start":"HH:MM","end":"HH:MM"(опц),"text":"..."}; '
+        '{"type":"note","text":"..."}; {"type":"done","match":"часть текста задачи, которую закрыть"}. '
+        "Относительные даты («завтра», «в пятницу», «через неделю») переведи в YYYY-MM-DD от сегодня. "
+        "Если для напоминания нет времени — 09:00. Если действий нет — пустой список. "
+        "Сообщение: " + text)
+    body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1200,
+            "messages": [{"role": "user", "content": prompt}]}
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages",
+                          headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                          json=body, timeout=60)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"claude {r.status_code}: {r.text[:140]}"}
+        raw = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        actions = (json.loads(raw) or {}).get("actions", [])
+    except Exception as e:
+        return {"ok": False, "error": "разбор: " + str(e)[:140]}
+    cnt = {"task": 0, "reminder": 0, "block": 0, "note": 0, "done": 0}
+    for a in actions:
+        ty = a.get("type")
+        try:
+            if ty == "task":
+                task_add(AddTask(text=a.get("text", ""), due=a.get("due", "") or "", priority=a.get("priority", "🟡") or "🟡"))
+            elif ty == "reminder":
+                reminder_add(AddReminder(date=a.get("date", ""), time=a.get("time", "09:00") or "09:00", text=a.get("text", "")))
+            elif ty == "block":
+                agenda_add(AddBlock(date=a.get("date", ""), start=a.get("start", ""), end=a.get("end", "") or "", text=a.get("text", "")))
+            elif ty == "note":
+                note_add(Note(text=a.get("text", "")))
+            elif ty == "done":
+                task_done(Done(text=a.get("match", "")))
+            else:
+                continue
+            cnt[ty] = cnt.get(ty, 0) + 1
+        except Exception:
+            pass
+    parts = []
+    names = {"task": "задач", "reminder": "напом.", "block": "в сетку", "note": "заметок", "done": "закрыто"}
+    for k, v in cnt.items():
+        if v:
+            parts.append(f"{v} {names[k]}")
+    summary = ("Готово: " + ", ".join(parts)) if parts else "Не нашёл, что добавить — уточни формулировку."
+    return {"ok": True, "summary": summary, "count": sum(cnt.values())}
+
+
+# ---------- пуш напоминаний по времени (как у бота, в приложение) ----------
+def _push_reminders_loop():
+    while True:
+        try:
+            if push_ready():
+                rems = load_json("state/reminders.json", [])
+                now = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
+                due, changed = [], False
+                for r in rems:
+                    if r.get("done") or r.get("pushed"):
+                        continue
+                    w = r.get("when", "")
+                    try:
+                        when = dt.datetime.fromisoformat(w)
+                    except Exception:
+                        continue
+                    if when <= now:
+                        due.append(r)
+                        r["pushed"] = True
+                        changed = True
+                if changed:
+                    subs = load_json("state/push_subs.json", [])
+                    for r in due:
+                        for s in subs:
+                            try:
+                                send_push(s, {"title": "⏰ Напоминание", "body": r.get("text", ""), "url": "/"})
+                            except Exception:
+                                pass
+                    gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминания отправлены")
+        except Exception as e:
+            print(f"push reminders: {e}")
+        _time.sleep(60)
+
+
+threading.Thread(target=_push_reminders_loop, daemon=True).start()
 
 
 # ---------- статика PWA ----------

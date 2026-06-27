@@ -974,6 +974,80 @@ def biggoal_delete(b: BGDel):
     return {"ok": gh_write("state/big_goals.json", json.dumps(g, ensure_ascii=False, indent=2), "app: цель удалена")}
 
 
+# ---------- группа компаний: помесячная прибыль по направлениям ----------
+DEFAULT_DIRS = {"Клиника на Павелецкой": 1.0, "Агрегатор Москва": 1.0, "Астрахань": 1.0, "Калмыкия": 0.5}
+
+
+def _prev_ym(ym):
+    try:
+        y, m = int(ym[:4]), int(ym[5:7])
+    except Exception:
+        return ""
+    m -= 1
+    if m < 1:
+        m = 12
+        y -= 1
+    return f"{y}-{m:02d}"
+
+
+@app.get("/api/group")
+def group(user: str = "", ym: str = ""):
+    months = load_json("state/finance_months.json", {})
+    dirs = load_json("state/finance_dirs.json", {}) or dict(DEFAULT_DIRS)
+    allym = sorted(months.keys())
+    if not ym:
+        ym = allym[-1] if allym else dt.date.today().isoformat()[:7]
+    data = months.get(ym, {})
+    prev = _prev_ym(ym)
+    pdata = months.get(prev, {})
+    names = list(dict.fromkeys(list(dirs.keys()) + list(data.keys())))
+    rows = []
+    total = owner = 0.0
+    for n in names:
+        p = data.get(n)
+        share = dirs.get(n, 1.0)
+        rows.append({"name": n, "profit": p, "prev": pdata.get(n), "share": share})
+        if isinstance(p, (int, float)):
+            total += p
+            owner += p * share
+    trend = [{"ym": y, "total": sum(v for v in months[y].values() if isinstance(v, (int, float)))} for y in allym[-6:]]
+    return {"ym": ym, "prev_ym": prev, "rows": rows, "total": round(total),
+            "owner_income": round(owner), "months": allym, "trend": trend}
+
+
+class GroupSave(BaseModel):
+    ym: str
+    rows: list
+
+
+@app.post("/api/group/save")
+def group_save(b: GroupSave):
+    months = load_json("state/finance_months.json", {})
+    dirs = load_json("state/finance_dirs.json", {}) or dict(DEFAULT_DIRS)
+    md = {}
+    for r in b.rows:
+        nm = (r.get("name") or "").strip()
+        if not nm:
+            continue
+        pr = r.get("profit")
+        try:
+            pr = float(pr) if pr not in (None, "") else None
+        except Exception:
+            pr = None
+        if pr is not None:
+            md[nm] = pr
+        sh = r.get("share")
+        try:
+            if sh not in (None, ""):
+                dirs[nm] = float(sh)
+        except Exception:
+            pass
+    months[b.ym] = md
+    ok1 = gh_write("state/finance_months.json", json.dumps(months, ensure_ascii=False, indent=2), f"app: финансы группы {b.ym}")
+    ok2 = gh_write("state/finance_dirs.json", json.dumps(dirs, ensure_ascii=False, indent=2), "app: доли направлений")
+    return {"ok": ok1 and ok2}
+
+
 # ---------- статика PWA ----------
 if os.path.isdir(WEB):
     app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

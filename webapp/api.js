@@ -149,6 +149,8 @@ const API = {
   bigGoalAdd(p) { return this._post("biggoals/add", p); },
   bigGoalStatus(id, status) { return this._post("biggoals/status", { id, status }); },
   bigGoalDelete(id) { return this._post("biggoals/delete", { id }); },
+  group(profile, ym) { return USE_REMOTE ? fetch(`${API_BASE}/group?user=${encodeURIComponent(profile.id)}&ym=${ym || ""}`).then(r => r.json()) : Promise.resolve({ rows: [], total: 0, months: [] }); },
+  groupSave(ym, rows) { return this._post("group/save", { ym, rows }); },
   async journal(limit) {
     if (USE_REMOTE) return fetch(`${API_BASE}/journal?limit=${limit || 50}`).then(r => r.json());
     return { entries: [] };

@@ -182,6 +182,7 @@ const RENDER = {
           <div class="metric"><div class="lbl" style="font-size:11px">Долг</div><div class="n">${(d.debt/1e6).toFixed(1)} млн</div></div>
           ${d.companies.slice(0,2).map((c)=>`<div class="metric"><div class="lbl" style="font-size:11px">${c.name.split("·").pop().trim()}</div><div class="n">${(c.profit/1e6).toFixed(2)} млн</div></div>`).join("")}
         </div>
+        <div class="card" onclick="show('group')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-building-community" style="color:var(--red);margin-right:8px"></i>Группа компаний — прибыль по месяцам</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
         <div class="sec-title">Рычаги к 5 млн</div>
         <div class="card">${d.levers.map((l)=>`<div style="padding:8px 0"><div class="row spread" style="font-size:13px;font-weight:500"><span>${l.name}</span><span class="lbl">+${Math.round(l.impact/1000)} т</span></div><div class="bar sm"><span style="width:${l.progress}%"></span></div></div>`).join("")}</div>`;
     } else if (f.scope === "company") {
@@ -503,6 +504,61 @@ async function delBigGoal(id) {
   toast("Удаляю…");
   const r = await API.bigGoalDelete(id);
   toast(r && r.ok !== false ? "Удалено ✓" : "Не удалось"); RENDER.goals();
+}
+
+/* ---- группа компаний: прибыль по месяцам ---- */
+let groupYM = "";
+RENDER.group = async function () {
+  const d = await API.group(profile, groupYM).catch(() => ({ rows: [], total: 0, owner_income: 0, months: [], trend: [], ym: groupYM }));
+  groupYM = d.ym || groupYM;
+  window.__group = d;
+  const nf = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n || 0));
+  const M = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
+  const ymLabel = (ym) => ym ? M[parseInt(ym.slice(5, 7)) - 1] + " " + ym.slice(0, 4) : "";
+  const dlt = (p, prev) => (typeof p === "number" && typeof prev === "number") ? `<span style="color:${p - prev >= 0 ? "#15A06D" : "#C0392B"};font-size:11.5px;font-weight:700">${p - prev >= 0 ? "▲" : "▼"} ${nf(Math.abs(p - prev))}</span>` : "";
+  el("s-group").innerHTML = `
+    <div class="link" onclick="show('money')" style="margin:8px 0;cursor:pointer">‹ Назад</div>
+    <h1 class="h">Группа компаний</h1>
+    <div class="row spread" style="margin:2px 0 12px">
+      <button class="mbtn" onclick="groupShift(-1)"><i class="ti ti-chevron-left"></i></button>
+      <div style="font-size:17px;font-weight:800">${ymLabel(d.ym)}</div>
+      <button class="mbtn" onclick="groupShift(1)"><i class="ti ti-chevron-right"></i></button>
+    </div>
+    <div class="card"><div class="lbl">Прибыль группы за месяц</div><div class="big">${nf(d.total)} ₽</div>
+      <div class="lbl">Твой доход (с учётом долей): <b style="color:var(--ink)">${nf(d.owner_income)} ₽</b></div></div>
+    <div class="card" style="padding:6px 16px">${(d.rows || []).map((r) => `<div class="li"><div class="t"><div style="font-weight:700">${esc(r.name)}${r.share && r.share !== 1 ? ` <span class="lbl" style="font-weight:400">· доля ${Math.round(r.share * 100)}%</span>` : ""}</div><div class="m">${r.profit == null ? "нет данных за месяц" : dlt(r.profit, r.prev)}</div></div><div style="font-weight:800">${r.profit == null ? "—" : nf(r.profit)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Направлений нет</div>'}</div>
+    <button class="btn red" onclick="openGroupForm()">Внести / изменить за ${ymLabel(d.ym)}</button>
+    ${(d.trend && d.trend.length > 1) ? `<div class="sec-title" style="margin-top:16px">Динамика группы</div><div class="card" style="padding:6px 16px">${d.trend.map((t) => `<div class="li"><span class="t">${ymLabel(t.ym)}</span><span style="font-weight:700">${nf(t.total)} ₽</span></div>`).join("")}</div>` : ""}
+    <div class="lbl" style="padding:8px 2px">Пока вносишь вручную. Позже подключим интеграцию — цифры будут обновляться сами.</div>`;
+};
+function groupShift(n) {
+  const cur = (window.__group && window.__group.ym) || new Date().toISOString().slice(0, 7);
+  let y = parseInt(cur.slice(0, 4)), m = parseInt(cur.slice(5, 7)) + n;
+  if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; }
+  groupYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.group();
+}
+function openGroupForm() {
+  const d = window.__group || { rows: [], ym: groupYM };
+  el("create").innerHTML = `
+    <div class="sheet">
+      <h3>Прибыль за ${d.ym}</h3>
+      <div class="lbl" style="margin-bottom:8px">Прибыль по направлениям (₽) и доля (%)</div>
+      <div id="gform">${(d.rows || []).map((r, i) => `<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center"><div style="flex:1;font-size:13px;font-weight:600">${esc(r.name)}</div><input id="gp${i}" type="number" inputmode="numeric" placeholder="прибыль" value="${r.profit == null ? "" : r.profit}" style="width:108px"><input id="gs${i}" type="number" inputmode="numeric" placeholder="%" value="${Math.round((r.share == null ? 1 : r.share) * 100)}" style="width:54px"></div>`).join("")}</div>
+      <button class="btn red" style="margin-top:8px" onclick="saveGroupForm()">Сохранить</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
+    </div>`;
+  el("create").classList.remove("hidden");
+}
+async function saveGroupForm() {
+  const d = window.__group || { rows: [] };
+  const rows = (d.rows || []).map((r, i) => {
+    const p = el("gp" + i) ? el("gp" + i).value : "";
+    const s = el("gs" + i) ? el("gs" + i).value : "";
+    return { name: r.name, profit: p === "" ? null : Number(p), share: s === "" ? 1 : Number(s) / 100 };
+  });
+  toast("Сохраняю…");
+  const r = await API.groupSave(d.ym, rows);
+  closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.group();
 }
 RENDER.week = async function () {
   const w = await API.weekplan(profile);

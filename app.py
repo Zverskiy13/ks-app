@@ -1369,6 +1369,85 @@ def pvl_report(user: str = "", days: int = 7):
     return data
 
 
+# ---------- АГРЕГАТОР: дневная выручка/себестоимость/маржа по клиникам ----------
+def _agg_path(ym):
+    return f"state/finance/agg-daily-{ym}.json"
+
+
+def _agg_with_margin(rows):
+    out = []
+    for r in rows:
+        rev = float(r.get("revenue") or 0)
+        cost = float(r.get("cost") or 0)
+        m = rev - cost
+        out.append({"region": r.get("region") or "—", "clinic": r.get("clinic") or "—",
+                    "revenue": round(rev), "cost": round(cost), "margin": round(m),
+                    "pct": round(m / rev * 100, 1) if rev else 0})
+    return out
+
+
+class FinIngest(BaseModel):
+    date: str
+    rows: list = []
+    token: str = ""
+    source: str = ""
+
+
+@app.post("/api/finance/ingest")
+def finance_ingest(b: FinIngest):
+    need = os.environ.get("INGEST_TOKEN", "")
+    if need and b.token != need:
+        return {"ok": False, "error": "Неверный токен"}
+    try:
+        d = dt.date.fromisoformat(b.date)
+    except Exception:
+        return {"ok": False, "error": "Дата нужна в формате YYYY-MM-DD"}
+    ym = d.strftime("%Y-%m")
+    store = load_json(_agg_path(ym), {})
+    clean = []
+    for r in (b.rows or []):
+        try:
+            clean.append({"region": str(r.get("region") or "—"), "clinic": str(r.get("clinic") or "—"),
+                          "revenue": round(float(r.get("revenue") or 0)), "cost": round(float(r.get("cost") or 0))})
+        except Exception:
+            continue
+    store[b.date] = {"rows": clean, "source": b.source or "",
+                     "ts": dt.datetime.now().isoformat(timespec="minutes")}
+    ok = gh_write(_agg_path(ym), json.dumps(store, ensure_ascii=False, indent=2), f"agg ingest {b.date}")
+    rev = sum(r["revenue"] for r in clean)
+    cost = sum(r["cost"] for r in clean)
+    return {"ok": ok, "date": b.date, "clinics": len(clean), "revenue": rev, "cost": cost,
+            "margin": rev - cost, "pct": round((rev - cost) / rev * 100, 1) if rev else 0}
+
+
+@app.get("/api/finance/agg")
+def finance_agg(user: str = "", ym: str = "", mode: str = "month", date: str = ""):
+    if by_id(user).get("role") != "owner":
+        return {"ok": False, "error": "Доступно только владельцу"}
+    ym = ym or dt.date.today().strftime("%Y-%m")
+    store = load_json(_agg_path(ym), {})
+    dates = sorted(store.keys())
+    if mode == "day":
+        d = date or (dates[-1] if dates else "")
+        rows = _agg_with_margin((store.get(d, {}) or {}).get("rows", []))
+    else:
+        acc = {}
+        for _dd, payload in store.items():
+            for r in payload.get("rows", []):
+                key = (r.get("region", "—"), r.get("clinic", "—"))
+                a = acc.setdefault(key, {"region": key[0], "clinic": key[1], "revenue": 0, "cost": 0})
+                a["revenue"] += r.get("revenue", 0)
+                a["cost"] += r.get("cost", 0)
+        rows = _agg_with_margin(list(acc.values()))
+        d = ""
+    rows.sort(key=lambda x: x["revenue"], reverse=True)
+    trev = sum(r["revenue"] for r in rows)
+    tcost = sum(r["cost"] for r in rows)
+    totals = {"revenue": trev, "cost": tcost, "margin": trev - tcost,
+              "pct": round((trev - tcost) / trev * 100, 1) if trev else 0}
+    return {"ok": True, "ym": ym, "mode": mode, "date": d, "dates": dates, "rows": rows, "totals": totals}
+
+
 # ---------- пуш напоминаний по времени (как у бота, в приложение) ----------
 def _push_reminders_loop():
     while True:

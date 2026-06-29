@@ -92,7 +92,8 @@ const RENDER = {
       <div class="board-pulse">
         <div class="pulse-card"><div class="k">Открыто задач</div><div class="n">${openCount}</div><div class="m">в работе</div></div>
         <div class="pulse-card ${hotDls ? "hot" : ""}"><div class="k">Дедлайны</div><div class="n">${hotDls}</div><div class="m">до 14 дней</div></div>
-      </div>` : ""}
+      </div>
+      <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>` : ""}
       ${top ? `<div class="hero">
         <div class="top"><div class="k">ГЛАВНОЕ НА СЕГОДНЯ</div><div class="v">${esc(top.text)}</div></div>
         <div class="bot"><span class="lbl"><i class="ti ti-clock"></i> ${esc(top.due ? fmtDue(top.due) : top.company)}</span><span class="link" onclick="show('tasks')">Открыть ›</span></div>
@@ -190,6 +191,7 @@ const RENDER = {
           ${d.companies.slice(0,2).map((c)=>`<div class="metric"><div class="lbl" style="font-size:11px">${c.name.split("·").pop().trim()}</div><div class="n">${(c.profit/1e6).toFixed(2)} млн</div></div>`).join("")}
         </div>
         <div class="card" onclick="show('group')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-building-community" style="color:var(--red);margin-right:8px"></i>Группа компаний — прибыль по месяцам</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
+        <div class="card" onclick="show('pvl')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
         <div class="sec-title">Рычаги к 5 млн</div>
         <div class="card">${d.levers.map((l)=>`<div style="padding:8px 0"><div class="row spread" style="font-size:13px;font-weight:500"><span>${l.name}</span><span class="lbl">+${Math.round(l.impact/1000)} т</span></div><div class="bar sm"><span style="width:${l.progress}%"></span></div></div>`).join("")}</div>`;
     } else if (f.scope === "company") {
@@ -675,6 +677,62 @@ function scanFinance() {
     toast("Подставил из отчёта — проверь и сохрани");
   });
 }
+let pvlDays = 7;
+function setPvlDays(d) { pvlDays = d; RENDER.pvl(); }
+async function addAiTask(i) {
+  const t = (window.__pvlTasks || [])[i]; if (!t) return;
+  const r = await API.addTask(t.text, "ПВЛ", t.priority || "🟡", "");
+  toast(r && r.ok !== false ? "Добавлено в задачи ✓" : "Не удалось");
+}
+RENDER.pvl = async function () {
+  el("s-pvl").innerHTML = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div><h1 class="h">Пилот ПВЛ</h1><div class="lbl" style="padding:0 2px 8px">Загружаю данные команды…</div>`;
+  const r = await API.pvlReport(profile, pvlDays).catch(() => ({ ok: false }));
+  const back = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div>`;
+  if (!r || r.ok === false) {
+    el("s-pvl").innerHTML = `${back}<h1 class="h">Пилот ПВЛ</h1><div class="card"><div class="lbl">${esc((r && r.error) || "Не удалось загрузить")}</div></div>`;
+    return;
+  }
+  const team = r.team || [], load = r.load || [], vol = r.volumes || {}, ai = r.ai || {};
+  window.__pvlTasks = (ai && ai.tasks) || [];
+  const seg = `<div class="seg"><b class="${pvlDays === 1 ? "on" : ""}" onclick="setPvlDays(1)">Сегодня</b><b class="${pvlDays === 7 ? "on" : ""}" onclick="setPvlDays(7)">7 дней</b></div>`;
+
+  const teamCard = team.length
+    ? `<div class="sec-title">Зарегистрировались (${team.length})</div><div class="card" style="padding:6px 16px">${team.map((t) => `<div class="li"><i class="ti ti-user" style="font-size:18px;color:var(--red)"></i><div class="t"><div style="font-weight:600">${esc(t.name || "")}</div><div class="m">${esc(t.label || "")}${t.since ? " · с " + esc(t.since) : ""}</div></div></div>`).join("")}</div>`
+    : `<div class="card"><div class="lbl">Пока никто не зарегистрировался в боте. Как подключатся — здесь появится команда и аналитика.</div></div>`;
+
+  const loadCard = load.length
+    ? `<div class="sec-title">Загрузка (отметок / ср. балл)</div><div class="card" style="padding:6px 16px">${load.map((l) => `<div class="li"><div class="t"><div style="font-weight:500">${esc(l.name || "")}</div><div class="m">${esc(l.label || "")}</div></div><span class="lbl">${l.marks} отм. · ${l.avg == null ? "—" : "ср. " + l.avg}</span></div>`).join("")}</div>` : "";
+
+  const quietCard = (r.quiet && r.quiet.length)
+    ? `<div class="card" style="border-left:3px solid var(--amber,#E1A100)"><div class="lbl">⚠️ Мало отмечаются: <b>${r.quiet.map(esc).join(", ")}</b></div></div>` : "";
+
+  const volCard = Object.keys(vol).length
+    ? `<div class="sec-title">Объёмы за период</div><div class="card" style="padding:8px 16px">${Object.entries(vol).map(([k, v]) => `<div class="li"><div class="t"><span style="font-weight:600">${esc(k)}:</span> ${esc(v)}</div></div>`).join("")}</div>` : "";
+
+  let aiBlock = "";
+  if (ai && ai.ok === false) {
+    aiBlock = `<div class="card"><div class="lbl">ИИ-аналитика недоступна${ai.error ? ": " + esc(ai.error) : ""}.</div></div>`;
+  } else if (ai && ai.ok) {
+    const core = ai.core || [], tasks = ai.tasks || [], instr = ai.instructions || [];
+    aiBlock = `<div class="director-note"><div class="k">ИИ-АНАЛИТИКА</div><div class="v">${esc(ai.summary || "")}</div></div>`;
+    if (core.length) aiBlock += `<div class="sec-title">🎯 Ядро проблем</div><div class="card" style="padding:6px 16px">${core.map((c) => `<div class="li"><span class="badge red" style="margin-right:6px">${c.count || ""}</span><div class="t"><div style="font-weight:600">${esc(c.theme || "")}</div><div class="m">${esc(c.detail || "")}</div></div></div>`).join("")}</div>`;
+    if (tasks.length) aiBlock += `<div class="sec-title">✅ Предложенные задачи</div><div class="card" style="padding:6px 16px">${tasks.map((t, i) => `<div class="li"><div class="t"><div style="font-weight:500">${esc(t.priority || "")} ${esc(t.text || "")}</div></div><button onclick="addAiTask(${i})" style="border:1px solid var(--line,#eee);background:var(--card,#fff);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer" title="Добавить в мои задачи"><i class="ti ti-plus"></i></button></div>`).join("")}</div>`;
+    if (instr.length) aiBlock += `<div class="sec-title">📋 Кандидаты в инструкции</div><div class="card" style="padding:6px 16px">${instr.map((t) => `<div class="li"><i class="ti ti-file-text" style="color:var(--red)"></i><div class="t">${esc(t.text || "")}</div></div>`).join("")}</div>`;
+  } else {
+    aiBlock = `<div class="card"><div class="lbl">Пока мало сигналов для анализа — как накопятся ответы команды, появится «ядро» и предложения.</div></div>`;
+  }
+
+  const lists = [];
+  const mk = (title, arr) => { if (arr && arr.length) lists.push(`<div class="sec-title">${title}</div><div class="card" style="padding:6px 16px">${arr.map((x) => `<div class="li"><div class="t"><div style="font-weight:500">${esc(x.text || "")}</div><div class="m">${esc(x.name || "")}</div></div></div>`).join("")}</div>`); };
+  mk("🚧 Что мешало / зависло", r.blockers);
+  mk("❓ Зоны «ничьё»", r.nichye);
+  mk("💡 Что починить (от команды)", r.fix);
+  mk("🛠 Идеи и проблемы (канал «идея»)", r.ideas);
+  const marksCard = (r.marks && r.marks.length)
+    ? `<div class="sec-title">🗓 Отметка руководителя${r.marks_week ? " (" + esc(r.marks_week) + ")" : ""}</div><div class="card" style="padding:6px 16px">${r.marks.map((m) => `<div class="li"><div class="t"><div style="font-weight:500">${esc(m.name || "")} — ${esc(m.status || "")}</div>${m.note ? `<div class="m">${esc(m.note)}</div>` : ""}</div></div>`).join("")}</div>` : "";
+
+  el("s-pvl").innerHTML = `${back}<h1 class="h">Пилот ПВЛ</h1>${seg}${quietCard}${aiBlock}${loadCard}${volCard}${lists.join("")}${marksCard}${teamCard}<div class="lbl" style="padding:10px 2px 20px">Данные собираются из бота @AMUKS_bot. Чем дольше команда отмечается, тем точнее «ядро».</div>`;
+};
 RENDER.week = async function () {
   const w = await API.weekplan(profile);
   window.__overdue = w.overdue || [];

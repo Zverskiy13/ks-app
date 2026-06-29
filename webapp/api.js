@@ -154,6 +154,8 @@ const API = {
   stt(audio_b64, mime) { return this._post("stt", { audio_b64, mime }); },
   vision(image_b64, mime, mode) { return this._post("vision", { image_b64, mime, mode: mode || "text" }); },
   home(profile) { return USE_REMOTE ? this._get("home", profile) : Promise.resolve({ agenda: [], deadlines: [], tasks: [] }); },
+  pvlTeam(profile) { return USE_REMOTE ? this._get("pvl/team", profile) : Promise.resolve({ team: [] }); },
+  pvlReport(profile, days) { return USE_REMOTE ? fetch(`${API_BASE}/pvl/report?user=${encodeURIComponent(profile.id)}&days=${days || 7}`).then(r => r.json()) : Promise.resolve({ ok: false }); },
   brain(text) { return this._post("brain", { text }); },
   async journal(limit) {
     if (USE_REMOTE) return fetch(`${API_BASE}/journal?limit=${limit || 50}`).then(r => r.json());

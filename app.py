@@ -1222,6 +1222,153 @@ def brain_parse(b: BrainIn):
     return {"ok": True, "summary": summary, "count": sum(cnt.values())}
 
 
+# ---------- ПИЛОТ ПВЛ: данные бота → приложение владельца ----------
+PVL_POS = {"админ": "Администратор", "врач": "Врач", "медсестра": "Медсестра", "руководитель": "Руководитель"}
+PVL_STATUS = {"ok": "🟢 в норме", "over": "🟡 перегружен", "idle": "⚪ простаивает", "issue": "🔴 есть вопросы"}
+
+
+def _pvl_recent(days):
+    days = max(int(days), 1)
+    today = dt.date.today()
+    months = {(today - dt.timedelta(days=d)).strftime("%Y-%m") for d in range(days)}
+    out = []
+    for mo in months:
+        out += load_json(f"state/workload/checkins-ПВЛ-{mo}.json", [])
+    cutoff = (today - dt.timedelta(days=days - 1)).isoformat()
+    return [c for c in out if c.get("date", "") >= cutoff]
+
+
+def _pvl_ints(s):
+    return [int(x) for x in re.findall(r"\d+", s or "")]
+
+
+def _pvl_label(e):
+    return "Руководитель" if e.get("role") == "head" else PVL_POS.get(e.get("position"), e.get("position"))
+
+
+def _pvl_report_data(days):
+    emps = load_json("state/workload/employees.json", [])
+    team = [{"name": e.get("name"), "position": e.get("position"), "role": e.get("role"),
+             "since": e.get("since"), "label": _pvl_label(e)} for e in emps]
+    checks = _pvl_recent(days)
+    by = {str(e["chat_id"]): {"emp": e, "ev": []} for e in emps if e.get("chat_id")}
+    for c in checks:
+        cid = str(c.get("chat_id"))
+        if cid in by and c.get("type") == "evening":
+            by[cid]["ev"].append(c)
+    load_rows, quiet = [], []
+    for cid, d in by.items():
+        e = d["emp"]; ev = d["ev"]
+        loads = [x["load"] for x in ev if isinstance(x.get("load"), int)]
+        avg = round(sum(loads) / len(loads), 1) if loads else None
+        load_rows.append({"name": e.get("name"), "label": _pvl_label(e), "marks": len(ev), "avg": avg})
+        if len(ev) < max(1, days // 2):
+            quiet.append(e.get("name"))
+    vol = {}
+    for cid, d in by.items():
+        pos = d["emp"].get("position")
+        for x in d["ev"]:
+            ints = _pvl_ints(x.get("nums"))
+            if ints:
+                vol.setdefault(pos, [0, 0, 0])
+                for i, v in enumerate(ints[:3]):
+                    vol[pos][i] += v
+    volumes = {}
+    if "админ" in vol:
+        a = vol["админ"]; volumes["Администраторы"] = f"звонки {a[0]}, записи {a[1]}, дозвоны {a[2]}"
+    if "врач" in vol:
+        volumes["Врачи"] = f"приёмов {vol['врач'][0]}"
+    if "медсестра" in vol:
+        volumes["Медсёстры"] = f"процедур {vol['медсестра'][0]}"
+    blk, nich, fix = [], [], []
+    for cid, d in by.items():
+        nm = d["emp"].get("name", "")
+        for x in d["ev"]:
+            ans = (x.get("qans") or "").strip()
+            if not ans or ans in ("-", "—", "нет", "Нет"):
+                continue
+            row = {"name": nm, "text": ans}
+            if x.get("qkey") == "blocker":
+                blk.append(row)
+            elif x.get("qkey") == "nichye":
+                nich.append(row)
+            elif x.get("qkey") == "fix":
+                fix.append(row)
+    ideas = [{"name": c.get("name"), "text": c.get("text")} for c in checks if c.get("type") == "feedback"]
+    marks = load_json("state/workload/marks-ПВЛ.json", [])
+    last_marks, marks_week = [], ""
+    if marks:
+        marks_week = marks[-1].get("week", "")
+        for m in marks[-1].get("marks", []):
+            last_marks.append({"name": m.get("name"), "status": PVL_STATUS.get(m.get("status"), m.get("status")),
+                               "note": m.get("note", "")})
+    return {"team": team, "load": load_rows, "quiet": quiet, "volumes": volumes,
+            "blockers": blk, "nichye": nich, "fix": fix, "ideas": ideas,
+            "marks": last_marks, "marks_week": marks_week, "checkins": len(checks)}
+
+
+def _pvl_ai(data):
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    probs = []
+    for r in data["blockers"]:
+        probs.append("МЕШАЛО/ЗАВИСЛО: " + r["text"])
+    for r in data["nichye"]:
+        probs.append("НИЧЬЁ: " + r["text"])
+    for r in data["fix"]:
+        probs.append("ПОЧИНИТЬ: " + r["text"])
+    for r in data["ideas"]:
+        probs.append("ИДЕЯ: " + r["text"])
+    if not key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    if not probs:
+        return {"ok": True, "core": [], "tasks": [], "instructions": [],
+                "summary": "Пока мало сигналов от команды — как накопятся ответы, появится анализ."}
+    prompt = (
+        "Ты операционный аналитик клиники. Ниже — реплики сотрудников из ежедневных чек-инов "
+        "(что мешало/зависло, что «ничьё», что починить, идеи). Сгруппируй повторяющееся в несколько "
+        "КОРНЕВЫХ тем («ядро проблем»), по каждой укажи частоту, и предложи решения. "
+        "Верни СТРОГО JSON без markdown и пояснений: "
+        '{"core":[{"theme":"короткое название темы","count":число,"detail":"1 фраза сути"}],'
+        '"tasks":[{"text":"конкретная задача в повелительном наклонении","priority":"🔴"|"🟡"|"🟢"}],'
+        '"instructions":[{"text":"что закрепить регламентом/должностной, чтобы не повторялось"}],'
+        '"summary":"2-3 предложения главного вывода для владельца"}. '
+        "Будь конкретным и кратким, на русском. Реплики:\n- " + "\n- ".join(probs[:120]))
+    body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1600,
+            "messages": [{"role": "user", "content": prompt}]}
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages",
+                          headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                          json=body, timeout=90)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"claude {r.status_code}"}
+        raw = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        j = json.loads(raw)
+        j["ok"] = True
+        return j
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:140]}
+
+
+@app.get("/api/pvl/team")
+def pvl_team(user: str = ""):
+    if by_id(user).get("role") != "owner":
+        return {"ok": False, "error": "Доступно только владельцу"}
+    return {"ok": True, "team": _pvl_report_data(7)["team"]}
+
+
+@app.get("/api/pvl/report")
+def pvl_report(user: str = "", days: int = 7):
+    if by_id(user).get("role") != "owner":
+        return {"ok": False, "error": "Доступно только владельцу"}
+    days = 1 if int(days) <= 1 else 7
+    data = _pvl_report_data(days)
+    data["ai"] = _pvl_ai(data)
+    data["ok"] = True
+    data["days"] = days
+    return data
+
+
 # ---------- пуш напоминаний по времени (как у бота, в приложение) ----------
 def _push_reminders_loop():
     while True:

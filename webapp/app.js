@@ -1009,7 +1009,7 @@ RENDER.health = function () {
 
   el("s-health").innerHTML = `${back}<h1 class="h">Здоровье</h1>
     ${summary}
-    <div class="row spread" style="margin-top:14px"><div class="sec-title">Напоминания о чекапах</div><button onclick="hsAddReminder()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ добавить</button></div>
+    <div class="row spread" style="margin-top:14px"><div class="sec-title">Напоминания о чекапах</div><div><button onclick="hsImport()" style="background:none;border:none;color:var(--muted);font-weight:600;cursor:pointer;margin-right:10px">импорт</button><button onclick="hsAddReminder()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ добавить</button></div></div>
     ${remCards}
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Результаты анализов</div><button onclick="hsAddResult()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ показатель</button></div>
     ${resList}
@@ -1035,13 +1035,13 @@ function hsReminderPostpone(id) { const H = hsLoad(); const r = H.reminders.find
 /* ---- формы ---- */
 function hsReminderForm(r) {
   r = r || {};
-  const opts = HS_TYPES.map((t) => `<option ${r.title === t ? "selected" : ""}>${t}</option>`).join("");
+  const opts = HS_TYPES.map((t) => `<option value="${t}">`).join("");
   el("create").innerHTML = `<div class="sheet"><h3>${r.id ? "Изменить напоминание" : "Новое напоминание"}</h3>
-    <div class="lbl" style="margin:6px 0 2px">Обследование</div>
-    <select id="hr_t" style="width:100%">${opts}</select>
+    <div class="lbl" style="margin:6px 0 2px">Название проверки (можно своё)</div>
+    <input id="hr_t" list="hr_tl" value="${(r.title || "").replace(/"/g, "&quot;")}" placeholder="напр. МРТ позвоночника или своё название" style="width:100%"><datalist id="hr_tl">${opts}</datalist>
     <div class="lbl" style="margin:8px 0 2px">Следующая дата</div>
     <input type="date" id="hr_d" value="${r.nextDate || new Date().toISOString().slice(0, 10)}" style="width:100%">
-    <div class="lbl" style="margin:8px 0 2px">Периодичность (дней)</div>
+    <div class="lbl" style="margin:8px 0 2px">Периодичность в днях (180 = полгода, 365 = год)</div>
     <input type="number" id="hr_f" value="${r.frequencyDays != null ? r.frequencyDays : 180}" style="width:100%">
     <div class="lbl" style="margin:8px 0 2px">Комментарий</div>
     <input id="hr_c" value="${(r.comment || "").replace(/"/g, "&quot;")}" placeholder="необязательно" style="width:100%">
@@ -1096,4 +1096,44 @@ function hsUploadPdf(input) {
   const f = input.files && input.files[0]; if (!f) return;
   const H = hsLoad(); H.files.push({ id: hsUID("health-file"), date: new Date().toISOString().slice(0, 10), name: f.name, type: "pdf", status: "uploaded" });
   hsSave(H); toast("Файл добавлен, автоматический разбор будет подключён позже"); RENDER.health();
+}
+
+/* ---- массовый импорт графика чекапов ---- */
+function hsParsePeriod(s) {
+  s = (s || "").trim().toLowerCase().replace(",", ".");
+  const n = parseFloat(s); if (!n || n <= 0) return 180;
+  if (s.includes("г") || s.includes("y")) return Math.round(n * 365);
+  if (s.includes("м")) return Math.round(n * 30);
+  if (s.includes("н") || s.includes("w")) return Math.round(n * 7);
+  return Math.round(n);
+}
+function hsParseDate(s) {
+  s = (s || "").trim(); if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})$/);
+  if (m) { let y = m[3]; if (y.length === 2) y = "20" + y; return `${y}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
+  return "";
+}
+function hsImport() {
+  el("create").innerHTML = `<div class="sheet"><h3>Импорт списка чекапов</h3>
+    <div class="lbl" style="margin:6px 0 8px">Одна проверка в строке через «;»:<br><b>Название; периодичность; дата</b><br>Период: <b>180</b> (дней), <b>6м</b> (мес.), <b>1г</b> (год), <b>2н</b> (нед.). Дата необязательна: 2026-07-15 или 15.07.2026.<br><br>Пример:<br>Биохимия крови; 6м; 15.07.2026<br>МРТ позвоночника; 1г<br>Мой массаж; 30</div>
+    <textarea id="hi_t" style="width:100%;min-height:150px" placeholder="Биохимия крови; 6м; 15.07.2026
+Кардиолог; 1г
+Витамин D; 4м"></textarea>
+    <button class="btn red" style="margin-top:12px" onclick="hsRunImport()">Добавить все</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsRunImport() {
+  const lines = (el("hi_t").value || "").split("\n").map((x) => x.trim()).filter(Boolean);
+  if (!lines.length) { toast("Список пуст"); return; }
+  const H = hsLoad(); let added = 0; const today = new Date().toISOString().slice(0, 10);
+  lines.forEach((line) => {
+    const p = line.split(/[;|\t]/).map((x) => x.trim());
+    const name = p[0]; if (!name) return;
+    H.reminders.push({ id: hsUID("health-reminder"), title: name, type: "custom",
+      frequencyDays: hsParsePeriod(p[1]), nextDate: hsParseDate(p[2]) || today, comment: "", status: "active" });
+    added++;
+  });
+  hsSave(H); closeCreate(); toast("Добавлено чекапов: " + added); RENDER.health();
 }

@@ -93,7 +93,9 @@ const RENDER = {
         <div class="pulse-card"><div class="k">Открыто задач</div><div class="n">${openCount}</div><div class="m">в работе</div></div>
         <div class="pulse-card ${hotDls ? "hot" : ""}"><div class="k">Дедлайны</div><div class="n">${hotDls}</div><div class="m">до 14 дней</div></div>
       </div>
-      <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>` : ""}
+      <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
+      <div class="card" onclick="show('agg')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
+      ${hsHomeCard()}` : ""}
       ${top ? `<div class="hero">
         <div class="top"><div class="k">ГЛАВНОЕ НА СЕГОДНЯ</div><div class="v">${esc(top.text)}</div></div>
         <div class="bot"><span class="lbl"><i class="ti ti-clock"></i> ${esc(top.due ? fmtDue(top.due) : top.company)}</span><span class="link" onclick="show('tasks')">Открыть ›</span></div>
@@ -192,6 +194,7 @@ const RENDER = {
         </div>
         <div class="card" onclick="show('group')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-building-community" style="color:var(--red);margin-right:8px"></i>Группа компаний — прибыль по месяцам</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
         <div class="card" onclick="show('pvl')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
+        <div class="card" onclick="show('agg')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
         <div class="sec-title">Рычаги к 5 млн</div>
         <div class="card">${d.levers.map((l)=>`<div style="padding:8px 0"><div class="row spread" style="font-size:13px;font-weight:500"><span>${l.name}</span><span class="lbl">+${Math.round(l.impact/1000)} т</span></div><div class="bar sm"><span style="width:${l.progress}%"></span></div></div>`).join("")}</div>`;
     } else if (f.scope === "company") {
@@ -231,6 +234,7 @@ const RENDER = {
         <div class="li" onclick="show('habits')"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="show('goals')"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="show('week')"><i class="ti ti-calendar-week" style="font-size:20px;color:var(--red)"></i><div class="t">План недели</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
+        ${admin ? `<div class="li" onclick="show('health')"><i class="ti ti-heartbeat" style="font-size:20px;color:var(--red)"></i><div class="t">Здоровье</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         <div class="li"><i class="ti ti-logout" style="font-size:20px;color:var(--muted)"></i><div class="t" onclick="logout()">Выйти</div></div>
       </div>
       <div class="card" style="text-align:center"><div class="lbl">${profile.title}</div><div style="font-size:13px;font-weight:600;margin-top:4px">Уровень 6 · «Командир» · 820 XP</div></div>`;
@@ -733,6 +737,41 @@ RENDER.pvl = async function () {
 
   el("s-pvl").innerHTML = `${back}<h1 class="h">Пилот ПВЛ</h1>${seg}${quietCard}${aiBlock}${loadCard}${volCard}${lists.join("")}${marksCard}${teamCard}<div class="lbl" style="padding:10px 2px 20px">Данные собираются из бота @AMUKS_bot. Чем дольше команда отмечается, тем точнее «ядро».</div>`;
 };
+let aggYM = null, aggMode = "month", aggDate = "";
+function aggMonthLabel(ym) { const [y, m] = ym.split("-").map(Number); return `${MONTHS[m - 1]} ${y}`; }
+function margColor(p) { p = Number(p) || 0; return p < 0 ? "#C0392B" : p < 20 ? "var(--amber,#E1A100)" : "#1F9D55"; }
+function aggSetMode(m) { aggMode = m; aggDate = ""; RENDER.agg(); }
+function aggShift(n) { let [y, m] = aggYM.split("-").map(Number); m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } aggYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.agg(); }
+function aggPick(d) { aggDate = d; aggMode = "day"; RENDER.agg(); }
+RENDER.agg = async function () {
+  if (!aggYM) { const t = new Date(); aggYM = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`; }
+  const back = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div>`;
+  el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1><div class="lbl" style="padding:0 2px 8px">Загружаю…</div>`;
+  const r = await API.finAgg(profile, aggYM, aggMode, aggDate).catch(() => ({ ok: false }));
+  if (!r || r.ok === false) { el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1><div class="card"><div class="lbl">${esc((r && r.error) || "Не удалось загрузить")}</div></div>`; return; }
+  const rows = r.rows || [], t = r.totals || {}, dates = r.dates || [];
+  const seg = `<div class="seg"><b class="${aggMode === "month" ? "on" : ""}" onclick="aggSetMode('month')">Месяц</b><b class="${aggMode === "day" ? "on" : ""}" onclick="aggSetMode('day')">День</b></div>`;
+  const nav = `<div class="row spread" style="margin:8px 0 10px"><button class="mbtn" onclick="aggShift(-1)" aria-label="Пред. месяц"><i class="ti ti-chevron-left"></i></button><div style="font-size:16px;font-weight:700">${aggMonthLabel(aggYM)}</div><button class="mbtn" onclick="aggShift(1)" aria-label="След. месяц"><i class="ti ti-chevron-right"></i></button></div>`;
+  let dayChips = "";
+  if (aggMode === "day") {
+    dayChips = dates.length ? `<div class="lbl" style="padding:2px 2px 8px">Дни: ${dates.map((d) => `<span onclick="aggPick('${d}')" style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;border:1px solid var(--line,#eee);border-radius:10px;cursor:pointer;${d === r.date ? "background:var(--red);color:#fff" : ""}">${d.slice(8, 10)}.${d.slice(5, 7)}</span>`).join("")}</div>` : `<div class="lbl" style="padding:2px 2px 8px">За этот месяц дней пока нет</div>`;
+  }
+  const totCard = `<div class="card"><div class="lbl">${aggMode === "day" ? (r.date ? "День " + r.date.slice(8, 10) + "." + r.date.slice(5, 7) : "—") : "Свод за месяц"}</div>
+    <div class="big">${fmt(t.margin || 0)}</div>
+    <div class="row spread"><span class="lbl">выручка ${fmt(t.revenue || 0)} · себест. ${fmt(t.cost || 0)}</span><span class="lbl" style="font-weight:700;color:${margColor(t.pct)}">маржа ${t.pct || 0}%</span></div></div>`;
+  const byReg = {}; rows.forEach((x) => { (byReg[x.region] = byReg[x.region] || []).push(x); });
+  let body;
+  if (!rows.length) {
+    body = `<div class="card"><div class="lbl">Данных пока нет. Когда агент начнёт заносить ежедневный отчёт с почты, здесь появятся выручка, себестоимость и маржа по клиникам и регионам.</div></div>`;
+  } else {
+    body = Object.keys(byReg).map((reg) => {
+      const list = byReg[reg];
+      const rr = list.reduce((s, x) => s + x.revenue, 0), cc = list.reduce((s, x) => s + x.cost, 0), mm = rr - cc, pp = rr ? Math.round(mm / rr * 1000) / 10 : 0;
+      return `<div class="sec-title">${esc(reg)} · маржа <span style="color:${margColor(pp)}">${pp}%</span></div><div class="card" style="padding:6px 16px">${list.map((x) => `<div class="li"><div class="t"><div style="font-weight:600">${esc(x.clinic)}</div><div class="m">выручка ${fmt(x.revenue)} · себест. ${fmt(x.cost)}</div></div><div style="text-align:right"><div style="font-weight:700">${fmt(x.margin)}</div><div class="m" style="color:${margColor(x.pct)}">${x.pct}%</div></div></div>`).join("")}</div>`;
+    }).join("");
+  }
+  el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1>${seg}${nav}${dayChips}${totCard}${body}<div class="lbl" style="padding:10px 2px 20px">Данные заносит агент из ежедневного отчёта на почте. Маржа = выручка − себестоимость.</div>`;
+};
 RENDER.week = async function () {
   const w = await API.weekplan(profile);
   window.__overdue = w.overdue || [];
@@ -840,3 +879,221 @@ document.querySelectorAll("#sheet .opt").forEach((o) => o.onclick = async () => 
 });
 
 buildPad();
+
+/* ===================== ЗДОРОВЬЕ (health-planner · localStorage) ===================== */
+const HS_KEY = "ks_health";
+const HS_TYPES = ["ОАК", "Биохимия крови", "Липидный профиль", "Витамин D", "Ферритин", "Глюкоза / инсулин", "ТТГ", "Кардиолог", "УЗИ", "Стоматолог", "Check-up общий"];
+const HS_MARKERS = ["Витамин D", "Ферритин", "Холестерин общий", "ЛПНП", "Глюкоза", "Гликированный гемоглобин", "ТТГ", "АЛТ", "АСТ", "Креатинин"];
+const HS_REF = {
+  "Витамин D": { min: 30, max: 100, unit: "нг/мл" },
+  "Ферритин": { min: 30, max: 300, unit: "нг/мл" },
+  "Холестерин общий": { min: 0, max: 5.2, unit: "ммоль/л" },
+  "ЛПНП": { min: 0, max: 3.0, unit: "ммоль/л" },
+  "Глюкоза": { min: 3.9, max: 5.5, unit: "ммоль/л" },
+  "Гликированный гемоглобин": { min: 0, max: 5.7, unit: "%" },
+  "ТТГ": { min: 0.4, max: 4.0, unit: "мкМЕ/мл" },
+  "АЛТ": { min: 0, max: 41, unit: "Ед/л" },
+  "АСТ": { min: 0, max: 40, unit: "Ед/л" },
+  "Креатинин": { min: 62, max: 106, unit: "мкмоль/л" }
+};
+function hsSave(d) { try { localStorage.setItem(HS_KEY, JSON.stringify(d)); } catch (e) {} }
+function hsLoad() {
+  try { const r = JSON.parse(localStorage.getItem(HS_KEY)); if (r && r.reminders) return r; } catch (e) {}
+  const t = new Date(); const iso = (n) => { const x = new Date(t); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+  const seed = { reminders: [
+      { id: "health-reminder-1", title: "Биохимия крови", type: "lab", frequencyDays: 180, nextDate: iso(12), comment: "Плановый контроль", status: "active" },
+      { id: "health-reminder-2", title: "Check-up общий", type: "checkup", frequencyDays: 365, nextDate: iso(45), comment: "", status: "active" }
+    ], results: [], files: [], settings: { targetCheckupFrequencyDays: 180 } };
+  hsSave(seed); return seed;
+}
+function hsUID(p) { return p + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000); }
+function daysLeft(iso) { const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(iso + "T00:00:00"); return Math.round((d - t) / 86400000); }
+function hsFmtD(iso) { return iso ? iso.split("-").reverse().join(".") : "—"; }
+function hsDdl(iso) { const d = daysLeft(iso); return d >= 0 ? "через " + d + " дн." : "просрочено " + (-d) + " дн."; }
+function hsIdxColor(i) { return i >= 80 ? "#1F9D55" : i >= 60 ? "var(--amber,#E1A100)" : "var(--red)"; }
+function hsRef(r) {
+  const mn = (r.refMin !== "" && r.refMin != null) ? Number(r.refMin) : (HS_REF[r.marker] ? HS_REF[r.marker].min : null);
+  const mx = (r.refMax !== "" && r.refMax != null) ? Number(r.refMax) : (HS_REF[r.marker] ? HS_REF[r.marker].max : null);
+  return { mn, mx };
+}
+function hsRefText(r) { const { mn, mx } = hsRef(r); if (mn == null && mx == null) return "диапазон не указан"; return "норма " + (mn != null ? mn : "") + "–" + (mx != null ? mx : ""); }
+function hsStatus(r) {
+  const { mn, mx } = hsRef(r); const v = Number(r.value);
+  if (mx != null && v > mx) return "выше";
+  if (mn != null && v < mn) return "ниже";
+  if (mn != null || mx != null) return "в диапазоне";
+  return "нет диапазона";
+}
+function hsLatest(marker) { return hsLoad().results.filter((r) => r.marker === marker).sort((a, b) => a.date < b.date ? 1 : -1); }
+function hsAttention() { let c = 0; HS_MARKERS.forEach((m) => { const rows = hsLatest(m); if (rows.length) { const s = hsStatus(rows[0]); if (s === "выше" || s === "ниже") c++; } }); return c; }
+function hsActive() { return hsLoad().reminders.filter((r) => r.status === "active").sort((a, b) => a.nextDate < b.nextDate ? -1 : 1); }
+function hsNext() { return hsActive()[0] || null; }
+function hsLastUpload() { const H = hsLoad(); const a = [...H.files.map((f) => f.date), ...H.results.map((r) => r.date)].sort(); return a.length ? a[a.length - 1] : null; }
+function hsIndex() {
+  const H = hsLoad(); let s = 100;
+  s -= hsActive().filter((r) => daysLeft(r.nextDate) < 0).length * 10;
+  s -= hsAttention() * 8;
+  if (!H.results.length) s -= 15;
+  else { const lu = hsLastUpload(); if (lu && daysLeft(lu) < -(H.settings.targetCheckupFrequencyDays || 180)) s -= 10; }
+  return Math.max(0, Math.min(100, Math.round(s)));
+}
+function hsSpark(rowsAsc) {
+  if (rowsAsc.length < 2) return "";
+  const vals = rowsAsc.map((r) => Number(r.value)); const mn = Math.min(...vals), mx = Math.max(...vals), rng = mx - mn || 1;
+  return `<div style="display:inline-flex;align-items:flex-end;gap:2px;height:18px">${vals.map((v) => { const h = 4 + Math.round((v - mn) / rng * 14); return `<span style="display:inline-block;width:4px;height:${h}px;background:var(--red);opacity:.55;border-radius:1px"></span>`; }).join("")}</div>`;
+}
+
+/* ---- карточка на главной ---- */
+function hsHomeCard() {
+  const nx = hsNext(), att = hsAttention(), up = hsLastUpload();
+  const sub = nx ? `${esc(nx.title)} — ${hsDdl(nx.nextDate)}` : "чекап не запланирован";
+  return `<div class="card" onclick="show('health')" style="cursor:pointer;margin-top:4px">
+    <div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-heartbeat" style="color:var(--red);margin-right:8px"></i>Здоровье</div><span class="link">Открыть ›</span></div>
+    <div class="m" style="margin-top:6px">Следующий чекап: ${sub}</div>
+    <div class="m">${att} показ. требуют внимания · анализы: ${hsFmtD(up)}</div></div>`;
+}
+
+/* ---- экран «Здоровье» ---- */
+RENDER.health = function () {
+  const H = hsLoad();
+  const idx = hsIndex(), nx = hsNext(), att = hsAttention(), active = hsActive(), lu = hsLastUpload();
+  const back = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div>`;
+
+  const summary = `<div class="card">
+    <div class="lbl">Индекс контроля</div>
+    <div class="big" style="color:${hsIdxColor(idx)}">${idx}<span style="font-size:18px;color:var(--muted)">/100</span></div>
+    <div class="row spread"><span class="lbl">Обновлено: ${hsFmtD(lu)}</span><span class="lbl">${active.length} активных напоминаний</span></div>
+    <div class="row spread" style="margin-top:4px"><span class="lbl">Ближайший чекап: ${nx ? esc(nx.title) + " · " + hsDdl(nx.nextDate) : "—"}</span><span class="lbl" style="color:${att ? "var(--red)" : "var(--muted)"}">${att} вне диапазона</span></div></div>`;
+
+  const remCards = active.length ? active.map((r) => {
+    const dl = daysLeft(r.nextDate), over = dl < 0;
+    return `<div class="card" style="${over ? "border-left:3px solid var(--red)" : ""}">
+      <div class="row spread"><div class="t" style="font-weight:600">${esc(r.title)}</div><span class="lbl" style="${over ? "color:var(--red)" : ""}">${over ? "просрочено " + (-dl) + " дн." : "через " + dl + " дн."}</span></div>
+      <div class="m">${hsFmtD(r.nextDate)}${r.comment ? " · " + esc(r.comment) : ""}</div>
+      <div class="row" style="gap:6px;margin-top:8px">
+        <button class="btn red" style="flex:1;padding:7px;font-size:13px" onclick="hsReminderDone('${r.id}')">Выполнено</button>
+        <button class="btn ghost" style="flex:1;padding:7px;font-size:13px" onclick="hsReminderPostpone('${r.id}')">Отложить</button>
+        <button class="btn ghost" style="flex:1;padding:7px;font-size:13px" onclick="hsEditReminder('${r.id}')">Изменить</button>
+      </div></div>`;
+  }).join("") : `<div class="card"><div class="lbl">Напоминаний нет. Добавьте первый чекап.</div></div>`;
+
+  const recent = H.results.slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 8);
+  const resList = recent.length ? `<div class="card" style="padding:6px 16px">${recent.map((r) => {
+    const s = hsStatus(r), col = (s === "выше" || s === "ниже") ? "var(--red)" : s === "в диапазоне" ? "#1F9D55" : "#9ca3af";
+    return `<div class="li"><div class="t"><div style="font-weight:600">${esc(r.marker)} — ${r.value} ${esc(r.unit || "")}</div><div class="m">${hsFmtD(r.date)} · ${esc(r.testType || "—")} · ${esc(hsRefText(r))}</div></div><span class="badge" style="color:${col};border-color:${col}">${s}</span></div>`;
+  }).join("")}</div>` : `<div class="lbl" style="padding:6px 2px 4px">Результатов пока нет — добавьте первый показатель.</div>`;
+
+  const fileList = H.files.length ? `<div class="card" style="padding:6px 16px">${H.files.slice().reverse().map((f) => `<div class="li"><i class="ti ti-file-text" style="color:var(--red)"></i><div class="t"><div style="font-weight:500">${esc(f.name)}</div><div class="m">${hsFmtD(f.date)} · файл добавлен, автоматический разбор будет подключён позже</div></div></div>`).join("")}</div>` : "";
+
+  const dyn = HS_MARKERS.map((m) => {
+    const rows = hsLatest(m);
+    if (!rows.length) return `<div class="li"><div class="t"><div style="font-weight:600">${m}</div><div class="m">нет данных</div></div><span class="badge" style="color:#9ca3af;border-color:#e5e7eb">—</span></div>`;
+    const last = rows[0], s = hsStatus(last);
+    const trend = rows.length >= 2 ? (Number(rows[0].value) > Number(rows[1].value) ? "растёт" : Number(rows[0].value) < Number(rows[1].value) ? "снижается" : "стабильно") : "—";
+    const col = (s === "выше" || s === "ниже") ? "var(--red)" : s === "в диапазоне" ? "#1F9D55" : "#9ca3af";
+    return `<div class="li"><div class="t"><div style="font-weight:600">${m}</div><div class="m">${last.value} ${esc(last.unit || "")} · ${hsFmtD(last.date)} · ${trend}</div></div><div style="text-align:right">${hsSpark(rows.slice(0, 6).reverse())}<div class="m" style="color:${col}">${s}</div></div></div>`;
+  }).join("");
+
+  const sig = [];
+  HS_MARKERS.forEach((m) => {
+    const rows = hsLatest(m); if (!rows.length) return;
+    const s = hsStatus(rows[0]);
+    if (s === "выше") sig.push(`${m} выше указанного диапазона (${rows[0].value} ${rows[0].unit || ""}). Рекомендовано обсудить со специалистом.`);
+    else if (s === "ниже") sig.push(`${m} ниже указанного диапазона (${rows[0].value} ${rows[0].unit || ""}). Рекомендовано обсудить со специалистом.`);
+    if (rows.length >= 2 && Number(rows[0].value) < Number(rows[1].value)) sig.push(`${m} снизился по сравнению с прошлым измерением — стоит отслеживать в динамике.`);
+  });
+  active.forEach((r) => { const dl = daysLeft(r.nextDate); if (dl < 0) sig.push(`${r.title}: дата прошла (${-dl} дн. назад). Рекомендовано записаться.`); else if (dl <= 14) sig.push(`${r.title} запланирована через ${dl} дн.`); });
+  if (!H.results.length) sig.push("Пока нет внесённых результатов анализов. Добавьте первые показатели для аналитики.");
+  else if (lu && daysLeft(lu) < -180) sig.push("Анализы не обновлялись более 6 месяцев.");
+  const analytics = sig.length ? `<div class="card" style="padding:6px 16px">${sig.map((s) => `<div class="li"><i class="ti ti-alert-triangle" style="color:var(--red)"></i><div class="t">${esc(s)}</div></div>`).join("")}</div>` : `<div class="card"><div class="lbl">Сейчас ничего критичного не вижу. Так держать 👍</div></div>`;
+
+  el("s-health").innerHTML = `${back}<h1 class="h">Здоровье</h1>
+    ${summary}
+    <div class="row spread" style="margin-top:14px"><div class="sec-title">Напоминания о чекапах</div><button onclick="hsAddReminder()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ добавить</button></div>
+    ${remCards}
+    <div class="row spread" style="margin-top:14px"><div class="sec-title">Результаты анализов</div><button onclick="hsAddResult()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ показатель</button></div>
+    ${resList}
+    <input type="file" id="hs_pdf" accept="application/pdf,image/*" style="display:none" onchange="hsUploadPdf(this)">
+    <button class="btn ghost" style="margin-top:8px" onclick="el('hs_pdf').click()"><i class="ti ti-upload"></i> Загрузить PDF</button>
+    ${fileList}
+    <div class="sec-title" style="margin-top:16px">Динамика показателей</div>
+    <div class="card" style="padding:6px 16px">${dyn}</div>
+    <div class="sec-title" style="margin-top:16px">Что требует внимания</div>
+    ${analytics}
+    <div class="lbl" style="padding:12px 2px 22px">Это не диагностика. Раздел помогает планировать чекапы и обсуждать показатели со специалистом. Отклонение от диапазона — повод обсудить с врачом, а не диагноз.</div>`;
+};
+
+/* ---- действия с напоминаниями ---- */
+function hsReminderDone(id) {
+  const H = hsLoad(); const r = H.reminders.find((x) => x.id === id); if (!r) return;
+  r.status = "done";
+  if (Number(r.frequencyDays) > 0) { const nd = new Date(); nd.setDate(nd.getDate() + Number(r.frequencyDays)); H.reminders.push({ id: hsUID("health-reminder"), title: r.title, type: r.type || "lab", frequencyDays: Number(r.frequencyDays), nextDate: nd.toISOString().slice(0, 10), comment: r.comment || "", status: "active" }); }
+  hsSave(H); toast("Выполнено ✓" + (Number(r.frequencyDays) > 0 ? " · запланирован следующий" : "")); RENDER.health();
+}
+function hsReminderPostpone(id) { const H = hsLoad(); const r = H.reminders.find((x) => x.id === id); if (!r) return; const d = new Date(r.nextDate + "T00:00:00"); d.setDate(d.getDate() + 14); r.nextDate = d.toISOString().slice(0, 10); r.status = "active"; hsSave(H); toast("Отложено на 2 недели"); RENDER.health(); }
+
+/* ---- формы ---- */
+function hsReminderForm(r) {
+  r = r || {};
+  const opts = HS_TYPES.map((t) => `<option ${r.title === t ? "selected" : ""}>${t}</option>`).join("");
+  el("create").innerHTML = `<div class="sheet"><h3>${r.id ? "Изменить напоминание" : "Новое напоминание"}</h3>
+    <div class="lbl" style="margin:6px 0 2px">Обследование</div>
+    <select id="hr_t" style="width:100%">${opts}</select>
+    <div class="lbl" style="margin:8px 0 2px">Следующая дата</div>
+    <input type="date" id="hr_d" value="${r.nextDate || new Date().toISOString().slice(0, 10)}" style="width:100%">
+    <div class="lbl" style="margin:8px 0 2px">Периодичность (дней)</div>
+    <input type="number" id="hr_f" value="${r.frequencyDays != null ? r.frequencyDays : 180}" style="width:100%">
+    <div class="lbl" style="margin:8px 0 2px">Комментарий</div>
+    <input id="hr_c" value="${(r.comment || "").replace(/"/g, "&quot;")}" placeholder="необязательно" style="width:100%">
+    <button class="btn red" style="margin-top:14px" onclick="hsSaveReminder('${r.id || ""}')">Сохранить</button>
+    ${r.id ? `<button class="btn ghost" style="margin-top:8px" onclick="hsDeleteReminder('${r.id}')">Удалить</button>` : ""}
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsAddReminder() { hsReminderForm(); }
+function hsEditReminder(id) { hsReminderForm(hsLoad().reminders.find((x) => x.id === id)); }
+function hsSaveReminder(id) {
+  const H = hsLoad();
+  const title = el("hr_t").value, nextDate = el("hr_d").value, frequencyDays = Number(el("hr_f").value) || 0, comment = el("hr_c").value.trim();
+  if (id) { const r = H.reminders.find((x) => x.id === id); if (r) { r.title = title; r.nextDate = nextDate; r.frequencyDays = frequencyDays; r.comment = comment; r.status = "active"; } }
+  else H.reminders.push({ id: hsUID("health-reminder"), title, type: "lab", frequencyDays, nextDate, comment, status: "active" });
+  hsSave(H); closeCreate(); toast("Сохранено ✓"); RENDER.health();
+}
+function hsDeleteReminder(id) { const H = hsLoad(); H.reminders = H.reminders.filter((x) => x.id !== id); hsSave(H); closeCreate(); toast("Удалено ✓"); RENDER.health(); }
+function hsAddResult() {
+  const tOpts = HS_TYPES.map((t) => `<option value="${t}">`).join("");
+  const mOpts = HS_MARKERS.map((t) => `<option value="${t}">`).join("");
+  el("create").innerHTML = `<div class="sheet"><h3>Новый результат</h3>
+    <div class="lbl" style="margin:6px 0 2px">Дата</div>
+    <input type="date" id="hx_date" value="${new Date().toISOString().slice(0, 10)}" style="width:100%">
+    <div class="lbl" style="margin:8px 0 2px">Тип исследования</div>
+    <input id="hx_test" list="hx_tl" placeholder="напр. Биохимия крови" style="width:100%"><datalist id="hx_tl">${tOpts}</datalist>
+    <div class="lbl" style="margin:8px 0 2px">Показатель</div>
+    <input id="hx_marker" list="hx_ml" placeholder="напр. Витамин D" oninput="hsPrefillRef()" style="width:100%"><datalist id="hx_ml">${mOpts}</datalist>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><div class="lbl" style="margin:8px 0 2px">Значение</div><input id="hx_val" type="number" step="any" style="width:100%"></div>
+      <div style="width:104px"><div class="lbl" style="margin:8px 0 2px">Ед.</div><input id="hx_unit" style="width:100%"></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><div class="lbl" style="margin:8px 0 2px">Норма от</div><input id="hx_min" type="number" step="any" style="width:100%"></div>
+      <div style="flex:1"><div class="lbl" style="margin:8px 0 2px">Норма до</div><input id="hx_max" type="number" step="any" style="width:100%"></div>
+    </div>
+    <div class="lbl" style="margin:8px 0 2px">Комментарий</div>
+    <input id="hx_c" placeholder="необязательно" style="width:100%">
+    <button class="btn red" style="margin-top:14px" onclick="hsSaveResult()">Сохранить</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsPrefillRef() { const m = el("hx_marker").value, ref = HS_REF[m]; if (!ref) return; if (!el("hx_unit").value) el("hx_unit").value = ref.unit; if (el("hx_min").value === "") el("hx_min").value = ref.min; if (el("hx_max").value === "") el("hx_max").value = ref.max; }
+function hsSaveResult() {
+  const marker = el("hx_marker").value.trim(), value = el("hx_val").value;
+  if (!marker || value === "") { toast("Укажите показатель и значение"); return; }
+  const H = hsLoad();
+  H.results.push({ id: hsUID("health-result"), date: el("hx_date").value, testType: el("hx_test").value.trim(), marker, value: Number(value), unit: el("hx_unit").value.trim(), refMin: el("hx_min").value === "" ? "" : Number(el("hx_min").value), refMax: el("hx_max").value === "" ? "" : Number(el("hx_max").value), comment: el("hx_c").value.trim(), source: "manual" });
+  hsSave(H); closeCreate(); toast("Показатель добавлен ✓"); RENDER.health();
+}
+function hsUploadPdf(input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  const H = hsLoad(); H.files.push({ id: hsUID("health-file"), date: new Date().toISOString().slice(0, 10), name: f.name, type: "pdf", status: "uploaded" });
+  hsSave(H); toast("Файл добавлен, автоматический разбор будет подключён позже"); RENDER.health();
+}

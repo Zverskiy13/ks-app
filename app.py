@@ -1449,6 +1449,176 @@ def finance_agg(user: str = "", ym: str = "", mode: str = "month", date: str = "
 
 
 # ---------- пуш напоминаний по времени (как у бота, в приложение) ----------
+# ---------- ИИ-ПОМОЩНИК: разбор всех процессов владельца ----------
+def _owner_id():
+    for u in PINS.values():
+        if u.get("role") == "owner":
+            return u["id"]
+    return "ivan"
+
+
+def _assistant_context(user, health):
+    L = []
+    try:
+        ts = [x for x in tasks(user) if not x.get("done")]
+        if ts:
+            L.append("ЗАДАЧИ активные (до 20): " + "; ".join((x.get("priority", "") + x.get("text", "")) + (f" [до {x.get('due')}]" if x.get("due") else "") for x in ts[:20]))
+    except Exception:
+        pass
+    try:
+        dls = deadlines_list(user)
+        if dls:
+            L.append("ДЕДЛАЙНЫ: " + "; ".join(f"{d.get('text')} — {d.get('days')}д" for d in dls[:15]))
+    except Exception:
+        pass
+    try:
+        dd = deals(user)
+        if dd:
+            L.append("СДЕЛКИ (воронка): " + "; ".join(f"{x.get('name')} [{x.get('stage')}, тишина {x.get('silent')}д, шаг: {x.get('step', '')}]" for x in dd[:15]))
+    except Exception:
+        pass
+    try:
+        f = finance(user)
+        if f.get("scope") == "group":
+            g = f["data"]
+            L.append(f"ФИНАНСЫ: личный доход {g.get('ownerIncome')} из цели {g.get('goal')}, долг {g.get('debt')}. Прибыль направлений: " + ", ".join(f"{c.get('name')}:{c.get('profit')}" for c in g.get("companies", [])))
+    except Exception:
+        pass
+    try:
+        ym = dt.date.today().strftime("%Y-%m")
+        store = load_json(_agg_path(ym), {})
+        if store:
+            acc = {}
+            for _d, p in store.items():
+                for r in p.get("rows", []):
+                    a = acc.setdefault(r.get("clinic", "—"), [0, 0])
+                    a[0] += r.get("revenue", 0)
+                    a[1] += r.get("cost", 0)
+            L.append("АГРЕГАТОР за месяц (клиника: выручка/себест/маржа%): " + "; ".join(f"{k}: {v[0]}/{v[1]}/{round((v[0] - v[1]) / v[0] * 100, 1) if v[0] else 0}%" for k, v in acc.items()))
+    except Exception:
+        pass
+    try:
+        p = _pvl_report_data(7)
+        probs = [x.get("text", "") for x in (p.get("blockers", []) + p.get("nichye", []) + p.get("fix", []))]
+        L.append(f"ПВЛ: в боте {len(p.get('team', []))} чел.; сигналы за 7 дн.: " + ("; ".join(probs[:10]) or "нет"))
+        if p.get("quiet"):
+            L.append("ПВЛ мало отмечаются: " + ", ".join(p["quiet"]))
+    except Exception:
+        pass
+    if health:
+        L.append(f"ЗДОРОВЬЕ: индекс контроля {health.get('index', '?')}/100; ближайший чекап {health.get('nextCheckup', '—')}; вне диапазона: {', '.join(health.get('attention', [])) or 'нет'}; просрочено чекапов: {health.get('overdue', 0)}")
+        if health.get("habits"):
+            L.append("ПРИВЫЧКИ/ТРЕКЕР: " + str(health.get("habits")))
+        if health.get("dayReport"):
+            L.append("ОТЧЁТ ПО ДНЮ: " + str(health.get("dayReport")))
+        if health.get("weight"):
+            L.append("ВЕС: " + str(health.get("weight")))
+    return "\n".join(L) or "Данных пока мало."
+
+
+def _assistant_call(key, mode, ctx, question):
+    if mode == "ask":
+        prompt = ("Ты — личный операционный ассистент владельца группы клиник «Клиники Столицы». "
+                  "Ответь кратко и по делу на вопрос, опираясь на данные ниже; если данных не хватает — так и скажи. "
+                  "Без медицинских диагнозов и без юридических заключений. Обычный текст, на русском.\n\nВОПРОС: " + question + "\n\nДАННЫЕ:\n" + ctx)
+        maxt = 900
+    else:
+        prompt = ("Ты — личный операционный ассистент владельца группы клиник «Клиники Столицы». "
+                  "По данным ниже дай разбор и рекомендации. Верни СТРОГО JSON без markdown: "
+                  '{"summary":"2-3 предложения: главное на сегодня и на что смотреть",'
+                  '"comments":[{"area":"Задачи|Дедлайны|Сделки|Финансы|Агрегатор|ПВЛ|Здоровье","text":"короткий комментарий и конкретное действие"}],'
+                  '"priorities":[{"text":"конкретное действие на сегодня"}]}. '
+                  "Будь конкретным, на русском, без воды. По здоровью — без диагнозов, только «обсудить со специалистом».\n\nДАННЫЕ:\n" + ctx)
+        maxt = 1600
+    body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": maxt,
+            "messages": [{"role": "user", "content": prompt}]}
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages",
+                          headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                          json=body, timeout=90)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"claude {r.status_code}"}
+        raw = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+        if mode == "ask":
+            return {"ok": True, "answer": raw.strip()}
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        j = json.loads(raw)
+        j["ok"] = True
+        j["date"] = dt.date.today().isoformat()
+        return j
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:140]}
+
+
+class AssistantIn(BaseModel):
+    user: str = ""
+    mode: str = "cached"
+    question: str = ""
+    health: dict = {}
+
+
+@app.post("/api/assistant")
+def assistant(b: AssistantIn):
+    if by_id(b.user).get("role") != "owner":
+        return {"ok": False, "error": "Доступно только владельцу"}
+    today_iso = dt.date.today().isoformat()
+    cache_path = f"state/assistant/digest-{today_iso}.json"
+    if b.mode == "cached":
+        c = load_json(cache_path, None)
+        return {"ok": True, "cached": bool(c), "digest": c}
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    ctx = _assistant_context(b.user, b.health or {})
+    if b.mode == "ask":
+        return _assistant_call(key, "ask", ctx, b.question or "")
+    dg = _assistant_call(key, "digest", ctx, "")
+    if dg.get("ok"):
+        gh_write(cache_path, json.dumps(dg, ensure_ascii=False, indent=2), f"assistant digest {today_iso}")
+    return dg
+
+
+def _assistant_daily():
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return
+    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
+    if now.hour < 7:
+        return
+    cp = f"state/assistant/digest-{now.date().isoformat()}.json"
+    if load_json(cp, None) is not None:
+        return
+    ctx = _assistant_context(_owner_id(), {})
+    dg = _assistant_call(key, "digest", ctx, "")
+    if dg.get("ok"):
+        gh_write(cp, json.dumps(dg, ensure_ascii=False, indent=2), "assistant: daily digest")
+        if push_ready():
+            for s in load_json("state/push_subs.json", []):
+                try:
+                    send_push(s, {"title": "☀️ Главное на сегодня", "body": (dg.get("summary", "") or "")[:180], "url": "/"})
+                except Exception:
+                    pass
+
+
+def _evening_push():
+    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
+    if now.hour < 21:
+        return
+    mark = f"state/assistant/evening-{now.date().isoformat()}.json"
+    if load_json(mark, None) is not None:
+        return
+    if not push_ready():
+        return
+    sent = 0
+    for s in load_json("state/push_subs.json", []):
+        try:
+            send_push(s, {"title": "🌙 Отчёт по дню", "body": "Отметься: что сделал и не успел + трекер привычек (выпивал/курил).", "url": "/"})
+            sent += 1
+        except Exception:
+            pass
+    gh_write(mark, json.dumps({"sent": sent, "ts": now.isoformat(timespec="minutes")}, ensure_ascii=False), "evening push")
+
+
 def _push_reminders_loop():
     while True:
         try:
@@ -1477,6 +1647,8 @@ def _push_reminders_loop():
                             except Exception:
                                 pass
                     gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминания отправлены")
+            _assistant_daily()
+            _evening_push()
         except Exception as e:
             print(f"push reminders: {e}")
         _time.sleep(60)

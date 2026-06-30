@@ -84,18 +84,22 @@ const RENDER = {
     const top = tasks.find((t) => !t.done && t.priority === "🔴") || tasks.find((t) => !t.done);
     const openCount = tasks.filter((t) => !t.done).length;
     const hotDls = dls.filter((d) => d.days != null && d.days <= 14).length;
-    const directorText = top ? `Фокус дня — ${esc(top.text)}. ${hotDls ? `Горящих дедлайнов: ${hotDls}.` : "Критичных дедлайнов нет."}` : (hotDls ? `Нет главной задачи, но есть ${hotDls} горящих дедлайнов.` : "Критичных рисков на сегодня не вижу.");
+    const AID = profile.role === "owner" ? await API.assistant(profile, "cached", "", null).catch(() => ({})) : {};
+    const aiSum = (AID && AID.digest && AID.digest.summary) ? AID.digest.summary : "";
+    const directorText = aiSum ? esc(aiSum) : (top ? `Фокус дня — ${esc(top.text)}. ${hotDls ? `Горящих дедлайнов: ${hotDls}.` : "Критичных дедлайнов нет."}` : (hotDls ? `Нет главной задачи, но есть ${hotDls} горящих дедлайнов.` : "Критичных рисков на сегодня не вижу."));
     el("s-home").innerHTML = `
       <div class="sub">${dateLabelToday()}</div>
       <h1 class="h">${profile.role === "owner" ? "Панель<br>управления" : "Привет,<br>" + profile.name.split(" ")[0]}</h1>
-      ${profile.role === "owner" ? `<div class="director-note"><div class="k">AI-ДИРЕКТОР</div><div class="v">${directorText}</div></div>
+      ${profile.role === "owner" ? `<div class="director-note" onclick="show('assist')" style="cursor:pointer"><div class="k">ИИ-ПОМОЩНИК</div><div class="v">${directorText}</div><div class="link" style="margin-top:6px">Открыть помощника ›</div></div>
       <div class="board-pulse">
         <div class="pulse-card"><div class="k">Открыто задач</div><div class="n">${openCount}</div><div class="m">в работе</div></div>
         <div class="pulse-card ${hotDls ? "hot" : ""}"><div class="k">Дедлайны</div><div class="n">${hotDls}</div><div class="m">до 14 дней</div></div>
       </div>
+      ${dashboardCard()}
       <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
       <div class="card" onclick="show('agg')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
-      ${hsHomeCard()}` : ""}
+      ${hsHomeCard()}
+      ${tkHomeCard()}` : ""}
       ${top ? `<div class="hero">
         <div class="top"><div class="k">ГЛАВНОЕ НА СЕГОДНЯ</div><div class="v">${esc(top.text)}</div></div>
         <div class="bot"><span class="lbl"><i class="ti ti-clock"></i> ${esc(top.due ? fmtDue(top.due) : top.company)}</span><span class="link" onclick="show('tasks')">Открыть ›</span></div>
@@ -234,6 +238,8 @@ const RENDER = {
         <div class="li" onclick="show('habits')"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="show('goals')"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="show('week')"><i class="ti ti-calendar-week" style="font-size:20px;color:var(--red)"></i><div class="t">План недели</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
+        ${admin ? `<div class="li" onclick="show('assist')"><i class="ti ti-sparkles" style="font-size:20px;color:var(--red)"></i><div class="t">ИИ-помощник</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
+        ${admin ? `<div class="li" onclick="show('track')"><i class="ti ti-trophy" style="font-size:20px;color:var(--red)"></i><div class="t">Трекер привычек</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         ${admin ? `<div class="li" onclick="show('health')"><i class="ti ti-heartbeat" style="font-size:20px;color:var(--red)"></i><div class="t">Здоровье</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         <div class="li"><i class="ti ti-logout" style="font-size:20px;color:var(--muted)"></i><div class="t" onclick="logout()">Выйти</div></div>
       </div>
@@ -1136,4 +1142,239 @@ function hsRunImport() {
     added++;
   });
   hsSave(H); closeCreate(); toast("Добавлено чекапов: " + added); RENDER.health();
+}
+
+/* ===================== ИИ-ПОМОЩНИК ===================== */
+function hsAiSummary() {
+  try {
+    const att = []; HS_MARKERS.forEach((m) => { const rows = hsLatest(m); if (rows.length) { const s = hsStatus(rows[0]); if (s === "выше" || s === "ниже") att.push(m + " " + s); } });
+    const nx = hsNext();
+    return { index: hsIndex(), nextCheckup: nx ? (nx.title + " " + hsDdl(nx.nextDate)) : "—", attention: att, overdue: hsActive().filter((r) => daysLeft(r.nextDate) < 0).length };
+  } catch (e) { return {}; }
+}
+let aiAnswer = "";
+RENDER.assist = async function () {
+  const back = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div>`;
+  el("s-assist").innerHTML = `${back}<h1 class="h">ИИ-помощник</h1><div class="lbl" style="padding:0 2px 8px">Загружаю сводку…</div>`;
+  const r = await API.assistant(profile, "cached", "", null).catch(() => ({ ok: false }));
+  const dg = r && r.digest;
+  const head = `<div class="row spread"><div class="sec-title">Сводка дня</div><button onclick="aiRefresh()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">⟳ обновить</button></div>`;
+  let digestHtml;
+  if (dg) {
+    digestHtml = `<div class="director-note"><div class="k">ГЛАВНОЕ СЕГОДНЯ</div><div class="v">${esc(dg.summary || "")}</div></div>`;
+    if (dg.priorities && dg.priorities.length) digestHtml += `<div class="sec-title">Приоритеты</div><div class="card" style="padding:6px 16px">${dg.priorities.map((p) => `<div class="li"><i class="ti ti-flag" style="color:var(--red)"></i><div class="t">${esc(p.text || "")}</div></div>`).join("")}</div>`;
+    if (dg.comments && dg.comments.length) digestHtml += `<div class="sec-title">По направлениям</div><div class="card" style="padding:6px 16px">${dg.comments.map((c) => `<div class="li"><div class="t"><div style="font-weight:600">${esc(c.area || "")}</div><div class="m">${esc(c.text || "")}</div></div></div>`).join("")}</div>`;
+    digestHtml += `<div class="lbl" style="padding:6px 2px">Обновлено: ${esc(dg.date || "сегодня")}</div>`;
+  } else {
+    digestHtml = `<div class="card"><div class="lbl">${(r && r.ok) ? "Сводка ещё не сформирована — нажмите «обновить»." : ((r && r.error) || "Не удалось загрузить.")}</div></div>`;
+  }
+  const askBox = `<div class="sec-title" style="margin-top:14px">Спросить ИИ о своих делах</div>
+    <div class="card"><textarea id="ai_q" placeholder="Напр.: на чём сфокусироваться сегодня? какие сделки рискуют? где проседает маржа?" style="width:100%;min-height:64px"></textarea>
+    <button class="btn red" style="margin-top:8px" onclick="aiAsk()">Спросить</button>
+    <div id="ai_a" style="margin-top:10px">${aiAnswer ? `<div class="director-note"><div class="k">ОТВЕТ ИИ</div><div class="v">${esc(aiAnswer)}</div></div>` : ""}</div></div>`;
+  el("s-assist").innerHTML = `${back}<h1 class="h">ИИ-помощник</h1>${head}${digestHtml}${askBox}<div class="lbl" style="padding:10px 2px 22px">ИИ опирается на ваши данные в приложении. Не заменяет врача или юриста; по здоровью — только «обсудить со специалистом».</div>`;
+};
+async function aiRefresh() {
+  toast("ИИ анализирует…");
+  const r = await API.assistant(profile, "digest", "", personalSummary()).catch(() => ({ ok: false }));
+  if (!r || r.ok === false) { toast((r && r.error) || "Не удалось"); return; }
+  toast("Готово ✓"); RENDER.assist();
+}
+async function aiAsk() {
+  const q = (el("ai_q").value || "").trim(); if (!q) { toast("Введите вопрос"); return; }
+  toast("ИИ думает…");
+  const r = await API.assistant(profile, "ask", q, personalSummary()).catch(() => ({ ok: false }));
+  if (r && r.ok && r.answer) { aiAnswer = r.answer; RENDER.assist(); }
+  else toast((r && r.error) || "Не удалось");
+}
+
+/* ===================== ТРЕКЕР ПРИВЫЧЕК (полезные + вредные + геймификация) ===================== */
+const TK_KEY = "ks_track";
+const TK_BADGES = [3, 7, 14, 30, 60, 90, 180];
+function tkSave(d) { try { localStorage.setItem(TK_KEY, JSON.stringify(d)); } catch (e) {} }
+function tkNorm(d) {
+  d.weight = d.weight || { goal: null, start: null, log: {} };
+  (d.bad || []).forEach((b) => { if (b.price == null) b.price = 0; if (b.norm == null) b.norm = 0; });
+  return d;
+}
+function tkLoad() {
+  try { const r = JSON.parse(localStorage.getItem(TK_KEY)); if (r && r.good) return tkNorm(r); } catch (e) {}
+  const seed = {
+    good: [{ id: "g-water", title: "Вода 2 л" }, { id: "g-move", title: "Зарядка / растяжка" }, { id: "g-walk", title: "Прогулка 8000 шагов" }, { id: "g-sleep", title: "Сон до 24:00" }, { id: "g-read", title: "Чтение 20 минут" }],
+    bad: [{ id: "b-alco", title: "Алкоголь", unit: "порций", price: 0, norm: 0 }, { id: "b-smoke", title: "Сигареты", unit: "шт", price: 0, norm: 0 }],
+    log: {}, weight: { goal: null, start: null, log: {} }
+  };
+  tkSave(seed); return seed;
+}
+function tkSpent(id, ym) { const d = tkLoad(); const b = d.bad.find((x) => x.id === id); let s = 0; Object.keys(d.log).forEach((k) => { if (ym && k.slice(0, 7) !== ym) return; const v = d.log[k].bad ? d.log[k].bad[id] : undefined; if (v > 0 && b) s += v * (b.price || 0); }); return Math.round(s); }
+function tkSaved(id, ym) { const d = tkLoad(); const b = d.bad.find((x) => x.id === id); if (!b || !b.norm || !b.price) return 0; let s = 0; Object.keys(d.log).forEach((k) => { if (ym && k.slice(0, 7) !== ym) return; const v = d.log[k].bad ? d.log[k].bad[id] : undefined; if (v != null) s += Math.max(0, (b.norm - v)) * b.price; }); return Math.round(s); }
+function tkSpark(vals) { if (!vals || vals.length < 2) return ""; const mn = Math.min(...vals), mx = Math.max(...vals), rng = mx - mn || 1; return `<div style="display:flex;align-items:flex-end;gap:3px;height:42px;margin-top:8px">${vals.map((v) => { const h = 6 + Math.round((v - mn) / rng * 34); return `<span style="flex:1;max-width:16px;height:${h}px;background:var(--red);opacity:.5;border-radius:2px"></span>`; }).join("")}</div>`; }
+function tkBadForm(id) {
+  const d = tkLoad(); const b = id ? d.bad.find((x) => x.id === id) : {};
+  el("create").innerHTML = `<div class="sheet"><h3>${id ? "Изменить привычку" : "Новая вредная привычка"}</h3>
+    <div class="lbl" style="margin:6px 0 2px">Название</div><input id="tb_t" value="${(b.title || "").replace(/"/g, "&quot;")}" placeholder="напр. Алкоголь" style="width:100%">
+    <div class="lbl" style="margin:8px 0 2px">Единица</div><input id="tb_u" value="${b.unit || ""}" placeholder="порций / шт" style="width:100%">
+    <div class="lbl" style="margin:8px 0 2px">Цена за единицу, ₽</div><input id="tb_p" type="number" value="${b.price || 0}" style="width:100%">
+    <div class="lbl" style="margin:8px 0 2px">Обычно в день (для расчёта экономии)</div><input id="tb_n" type="number" value="${b.norm || 0}" style="width:100%">
+    <button class="btn red" style="margin-top:12px" onclick="tkSaveBad('${id || ""}')">Сохранить</button>
+    ${id ? `<button class="btn ghost" style="margin-top:8px" onclick="tkDelBad('${id}')">Удалить</button>` : ""}
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function tkSaveBad(id) { const d = tkLoad(); const o = { title: el("tb_t").value.trim() || "Привычка", unit: el("tb_u").value.trim(), price: Number(el("tb_p").value) || 0, norm: Number(el("tb_n").value) || 0 }; if (id) { Object.assign(d.bad.find((x) => x.id === id), o); } else { d.bad.push({ id: "b-" + Date.now(), ...o }); } tkSave(d); closeCreate(); toast("Сохранено ✓"); RENDER.track(); }
+function tkDelBad(id) { const d = tkLoad(); d.bad = d.bad.filter((x) => x.id !== id); tkSave(d); closeCreate(); toast("Удалено"); RENDER.track(); }
+function tkAddWeight() { const d = tkLoad(); const cur = d.weight.log[tkToday()] || ""; const v = prompt("Вес сегодня, кг:", cur || ""); if (v === null) return; const n = parseFloat((v + "").replace(",", ".")); if (!n) { toast("Введите число"); return; } d.weight.log[tkToday()] = Math.round(n * 10) / 10; if (d.weight.start == null) d.weight.start = d.weight.log[tkToday()]; tkSave(d); toast("Вес записан ✓"); RENDER.track(); }
+function tkWeightGoal() { const d = tkLoad(); const v = prompt("Цель по весу, кг:", d.weight.goal || ""); if (v === null) return; const n = parseFloat((v + "").replace(",", ".")); if (!n) { toast("Введите число"); return; } d.weight.goal = Math.round(n * 10) / 10; const s = prompt("Стартовый вес, кг (для шкалы прогресса):", d.weight.start || ""); if (s !== null) { const sn = parseFloat((s + "").replace(",", ".")); if (sn) d.weight.start = Math.round(sn * 10) / 10; } tkSave(d); toast("Цель сохранена ✓"); RENDER.track(); }
+function tkToday() { return new Date().toISOString().slice(0, 10); }
+function tkDay(d, iso) { iso = iso || tkToday(); d.log[iso] = d.log[iso] || { good: {}, bad: {}, report: null }; return d.log[iso]; }
+function tkToggleGood(id) { const d = tkLoad(); const day = tkDay(d); day.good[id] = !day.good[id]; tkSave(d); RENDER.track(); }
+function tkClean(id) { const d = tkLoad(); tkDay(d).bad[id] = 0; tkSave(d); RENDER.track(); }
+function tkAmount(id) { const d = tkLoad(); const b = d.bad.find((x) => x.id === id); const v = prompt(`${b.title}: сколько сегодня (${b.unit || "шт"})? 0 — чисто`, "0"); if (v === null) return; tkDay(d).bad[id] = Math.max(0, parseInt(v) || 0); tkSave(d); RENDER.track(); }
+function tkStreak(id) {
+  const d = tkLoad(); let s = 0; const t0 = new Date(tkToday() + "T00:00:00");
+  for (let i = 0; i < 800; i++) { const iso = new Date(t0.getTime() - i * 86400000).toISOString().slice(0, 10); const day = d.log[iso]; if (day && day.bad && day.bad[id] === 0) s++; else break; }
+  return s;
+}
+function tkBest(id) {
+  const d = tkLoad(); const days = Object.keys(d.log).sort(); let best = 0, cur = 0, prev = null;
+  days.forEach((iso) => { const v = d.log[iso].bad ? d.log[iso].bad[id] : undefined; if (v === 0) { cur = (prev && (new Date(iso + "T00:00:00") - new Date(prev + "T00:00:00")) === 86400000) ? cur + 1 : 1; best = Math.max(best, cur); prev = iso; } else { cur = 0; prev = null; } });
+  return best;
+}
+function tkXP() { const d = tkLoad(); let xp = 0; Object.keys(d.log).forEach((iso) => { const day = d.log[iso]; xp += Object.values(day.good || {}).filter(Boolean).length * 5; (d.bad || []).forEach((b) => { if (day.bad && day.bad[b.id] === 0) xp += 10; }); }); return xp; }
+function tkLevel() { return Math.floor(tkXP() / 100) + 1; }
+let trackYM = null, trackBad = null;
+function tkShiftMonth(n) { let [y, m] = trackYM.split("-").map(Number); m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } trackYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.track(); }
+function tkPickBad(id) { trackBad = id; RENDER.track(); }
+function tkHomeCard() {
+  const d = tkLoad(); const day = d.log[tkToday()] || { good: {}, bad: {} };
+  const goodDone = Object.values(day.good || {}).filter(Boolean).length;
+  const streaks = d.bad.map((b) => `${b.title.split(" ")[0]} ${tkStreak(b.id)}д`).join(" · ");
+  return `<div class="card" onclick="show('track')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-trophy" style="color:var(--red);margin-right:8px"></i>Трекер дня · ур. ${tkLevel()}</div><span class="link">Открыть ›</span></div><div class="m" style="margin-top:6px">Полезные сегодня: ${goodDone}/${d.good.length} · Чисто: ${streaks}</div></div>`;
+}
+RENDER.track = function () {
+  const d = tkLoad(); const day = tkDay(d); if (!trackYM) trackYM = tkToday().slice(0, 7); if (!trackBad) trackBad = (d.bad[0] || {}).id;
+  const back = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div>`;
+
+  const goodChips = d.good.map((g) => `<div onclick="tkToggleGood('${g.id}')" style="display:inline-flex;align-items:center;gap:6px;margin:3px 6px 3px 0;padding:7px 12px;border-radius:14px;cursor:pointer;border:1px solid ${day.good[g.id] ? "var(--red)" : "var(--line,#eee)"};background:${day.good[g.id] ? "var(--red)" : "#fff"};color:${day.good[g.id] ? "#fff" : "var(--ink,#222)"};font-size:13px;font-weight:600"><i class="ti ti-${day.good[g.id] ? "check" : "plus"}"></i>${esc(g.title)}</div>`).join("");
+
+  const badToday = d.bad.map((b) => { const v = day.bad[b.id]; const set = v != null; return `<div class="li"><div class="t"><div style="font-weight:600">${esc(b.title)}</div><div class="m">${set ? (v === 0 ? "сегодня чисто 👍" : "сегодня: " + v + " " + (b.unit || "")) : "не отмечено"}</div></div><div><button class="btn ghost" style="padding:6px 10px" onclick="tkClean('${b.id}')">Чисто</button> <button class="btn ghost" style="padding:6px 10px" onclick="tkAmount('${b.id}')">Указать</button></div></div>`; }).join("");
+
+  const game = d.bad.map((b) => {
+    const st = tkStreak(b.id), best = tkBest(b.id), reached = Math.max(st, best);
+    const badges = TK_BADGES.map((m) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;${reached >= m ? "background:#1F9D55;color:#fff" : "background:#f0f0f0;color:#bbb"}">${m}д</span>`).join("");
+    const money = b.price ? `<div class="m" style="margin-top:4px">за месяц: сэкономлено <b style="color:#1F9D55">${tkSaved(b.id, trackYM)} ₽</b>${tkSpent(b.id, trackYM) ? ` · потрачено ${tkSpent(b.id, trackYM)} ₽` : ""}</div>` : `<div class="m" style="margin-top:4px;color:#bbb">цена не задана — нажми ✎ для подсчёта денег</div>`;
+    return `<div style="padding:8px 0;border-top:1px solid var(--line,#f0f0f0)"><div class="row spread"><div style="font-weight:600">${esc(b.title)} <i class="ti ti-pencil" style="color:#ccc;cursor:pointer;font-size:15px" onclick="tkBadForm('${b.id}')"></i></div><div class="lbl">серия <b style="color:#1F9D55">${st}</b> дн · рекорд ${best}</div></div>${money}<div style="margin-top:6px">${badges}</div></div>`;
+  }).join("");
+
+  // календарь выбранной вредной привычки
+  const [Y, M] = trackYM.split("-").map(Number);
+  const startW = (new Date(Y, M - 1, 1).getDay() + 6) % 7, dim = new Date(Y, M, 0).getDate();
+  let cells = ""; for (let i = 0; i < startW; i++) cells += "<div></div>";
+  for (let dd = 1; dd <= dim; dd++) {
+    const iso = `${Y}-${String(M).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    const v = d.log[iso] && d.log[iso].bad ? d.log[iso].bad[trackBad] : undefined;
+    const bg = v === 0 ? "#1F9D55" : (v > 0 ? "var(--red)" : "#eee"), col = (v == null) ? "#999" : "#fff";
+    cells += `<div title="${iso}" style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:8px;background:${bg};color:${col};font-size:12px;font-weight:600">${dd}</div>`;
+  }
+  const badTabs = d.bad.map((b) => `<b class="${trackBad === b.id ? "on" : ""}" onclick="tkPickBad('${b.id}')">${esc(b.title)}</b>`).join("");
+  const calendar = `<div class="seg">${badTabs}</div>
+    <div class="row spread" style="margin:8px 0"><button class="mbtn" onclick="tkShiftMonth(-1)"><i class="ti ti-chevron-left"></i></button><div style="font-weight:700">${MONTHS[M - 1]} ${Y}</div><button class="mbtn" onclick="tkShiftMonth(1)"><i class="ti ti-chevron-right"></i></button></div>
+    <div class="cal-h">${["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((w) => `<div>${w}</div>`).join("")}</div>
+    <div class="cal" style="gap:4px">${cells}</div>
+    <div class="lbl" style="padding:6px 2px"><span style="color:#1F9D55">●</span> чисто · <span style="color:var(--red)">●</span> был срыв · ○ нет отметки</div>`;
+
+  const W = d.weight; const wdates = Object.keys(W.log).sort(); const wcur = wdates.length ? W.log[wdates[wdates.length - 1]] : null;
+  let weightCard;
+  if (wcur == null) {
+    weightCard = `<div class="lbl">Вес ещё не вносился. Задай цель и добавь первый замер кнопками справа ↑</div>`;
+  } else {
+    const goal = W.goal, start = (W.start != null ? W.start : wcur);
+    let bar;
+    if (goal != null) {
+      const total = Math.abs(start - goal) || 1, done = Math.abs(start - wcur), prog = Math.max(0, Math.min(100, Math.round(done / total * 100)));
+      const remain = Math.round((wcur - goal) * 10) / 10;
+      const remTxt = remain > 0 ? ("осталось " + remain + " кг") : remain < 0 ? ("ниже цели на " + (-remain) + " кг") : "цель достигнута 🎉";
+      bar = `<div class="row spread"><span class="lbl">старт ${start} · цель ${goal}</span><span class="lbl" style="font-weight:700">${remTxt}</span></div><div class="bar"><span style="width:${prog}%"></span></div>`;
+    } else { bar = `<div class="lbl">Цель не задана — нажми «цель».</div>`; }
+    const trend = wdates.length >= 2 ? (wcur < W.log[wdates[wdates.length - 2]] ? "снижается ↓" : wcur > W.log[wdates[wdates.length - 2]] ? "растёт ↑" : "стабильно") : "";
+    weightCard = `<div class="big">${wcur} кг ${trend ? `<span style="font-size:13px;color:var(--muted)">${trend}</span>` : ""}</div>${bar}${tkSpark(wdates.slice(-14).map((k) => W.log[k]))}`;
+  }
+  const rep = day.report;
+  const repCard = rep ? `<div class="card"><div class="lbl">Отчёт за сегодня</div><div style="font-weight:600;margin-top:4px">Сделал: ${esc(rep.done || "—")}</div><div class="m">Не успел: ${esc(rep.notDone || "—")} · настроение ${rep.mood || "-"}/5</div></div>` : "";
+
+  el("s-track").innerHTML = `${back}<h1 class="h">Трекер дня</h1>
+    <div class="card"><div class="row spread"><div class="lbl">Уровень и опыт</div><div class="lbl">${tkXP()} XP</div></div><div class="big">Уровень ${tkLevel()}</div><div class="bar"><span style="width:${tkXP() % 100}%"></span></div><div class="lbl">до следующего уровня ${100 - (tkXP() % 100)} XP</div></div>
+    <div class="sec-title" style="margin-top:14px">Полезные привычки сегодня</div>
+    <div class="card"><div>${goodChips}</div></div>
+    <div class="row spread" style="margin-top:14px"><div class="sec-title">Вредные привычки — отметка дня</div><button onclick="tkBadForm('')" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ привычка</button></div>
+    <div class="card" style="padding:6px 16px">${badToday}</div>
+    <div class="sec-title" style="margin-top:14px">Прогресс отказа и деньги</div>
+    <div class="card">${game}</div>
+    <div class="row spread" style="margin-top:14px"><div class="sec-title">Вес и цель</div><div><button onclick="tkWeightGoal()" style="background:none;border:none;color:var(--muted);font-weight:600;cursor:pointer;margin-right:10px">цель</button><button onclick="tkAddWeight()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ вес</button></div></div>
+    <div class="card">${weightCard}</div>
+    <div class="sec-title" style="margin-top:14px">Календарь</div>
+    <div class="card">${calendar}</div>
+    <div class="row spread" style="margin-top:14px"><div class="sec-title">Вечерний отчёт</div><button onclick="tkReportForm()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">отметиться</button></div>
+    ${repCard}
+    <div class="lbl" style="padding:12px 2px 22px">Серия растёт за каждый чистый день. Срыв обнуляет серию, но не прогресс — рекорд и опыт остаются. Двигаемся дальше 💪</div>`;
+};
+function tkReportForm() {
+  const d = tkLoad(); const day = tkDay(d); const rep = day.report || {};
+  el("create").innerHTML = `<div class="sheet"><h3>Отчёт по дню</h3>
+    <div class="lbl" style="margin:6px 0 2px">Что сделал сегодня</div>
+    <textarea id="tr_done" style="width:100%;min-height:54px">${(rep.done || "").replace(/</g, "&lt;")}</textarea>
+    <div class="lbl" style="margin:8px 0 2px">Что не успел</div>
+    <textarea id="tr_not" style="width:100%;min-height:44px">${(rep.notDone || "").replace(/</g, "&lt;")}</textarea>
+    <div class="lbl" style="margin:8px 0 2px">Настроение / энергия (1–5)</div>
+    <input id="tr_mood" type="number" min="1" max="5" value="${rep.mood || 3}" style="width:100%">
+    <div class="lbl" style="margin:10px 0 4px">Вредные привычки сегодня</div>
+    ${d.bad.map((b) => { const v = day.bad[b.id]; return `<div class="row spread" style="margin:4px 0"><span>${esc(b.title)}</span><span><button class="btn ghost" style="padding:5px 10px" onclick="tkRepClean('${b.id}')">Чисто</button> <button class="btn ghost" style="padding:5px 10px" onclick="tkRepAmount('${b.id}')">Указать</button> <b style="margin-left:6px">${v == null ? "—" : (v === 0 ? "чисто" : v)}</b></span></div>`; }).join("")}
+    <button class="btn red" style="margin-top:12px" onclick="tkSaveReport()">Сохранить отчёт</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function tkRepClean(id) { const d = tkLoad(); tkDay(d).bad[id] = 0; tkSave(d); tkReportForm(); }
+function tkRepAmount(id) { const d = tkLoad(); const b = d.bad.find((x) => x.id === id); const v = prompt(`${b.title}: сколько сегодня (${b.unit || "шт"})? 0 — чисто`, "0"); if (v === null) return; tkDay(d).bad[id] = Math.max(0, parseInt(v) || 0); tkSave(d); tkReportForm(); }
+function tkSaveReport() { const d = tkLoad(); const day = tkDay(d); day.report = { done: el("tr_done").value.trim(), notDone: el("tr_not").value.trim(), mood: Number(el("tr_mood").value) || 3, ts: new Date().toISOString() }; tkSave(d); closeCreate(); toast("Отчёт сохранён ✓"); RENDER.track(); }
+function personalSummary() {
+  const h = hsAiSummary();
+  try {
+    const d = tkLoad(); const day = d.log[tkToday()] || { good: {}, bad: {} };
+    const goodDone = Object.values(day.good || {}).filter(Boolean).length;
+    const streaks = d.bad.map((b) => `${b.title}: серия чистых ${tkStreak(b.id)}д, сегодня ${day.bad && day.bad[b.id] != null ? (day.bad[b.id] === 0 ? "чисто" : day.bad[b.id]) : "—"}`).join("; ");
+    h.habits = `полезных сегодня ${goodDone}/${d.good.length}; ${streaks}; уровень ${tkLevel()}`;
+    const ym = tkToday().slice(0, 7);
+    const money = d.bad.filter((b) => b.price).map((b) => `${b.title}: сэкономлено за месяц ~${tkSaved(b.id, ym)}₽`).join("; ");
+    if (money) h.habits += `; ${money}`;
+    const W = d.weight || {}; const wk = Object.keys(W.log || {}).sort(); if (wk.length) { const c = W.log[wk[wk.length - 1]]; h.weight = `текущий ${c}кг${W.goal != null ? `, цель ${W.goal}кг` : ""}`; }
+    const rep = day.report; if (rep) h.dayReport = `сделал: ${rep.done || "—"}; не успел: ${rep.notDone || "—"}; настроение ${rep.mood || "-"}/5`;
+  } catch (e) {}
+  return h;
+}
+
+/* ---- рабочий стол на главной: быстрые действия (мутируют + обновляют главную) ---- */
+function hmGood(id) { tkToggleGood(id); RENDER.home(); }
+function hmAddTask() { const i = el("hm_task"); const t = (i && i.value || "").trim(); if (!t) return; toast("Добавляю…"); API.addTask(t, "", "🟡", "").then(() => { toast("Задача добавлена ✓"); RENDER.home(); }).catch(() => toast("Не удалось")); }
+function hmClean(id) { tkClean(id); RENDER.home(); }
+function hmAmount(id) { tkAmount(id); RENDER.home(); }
+function hmWeight() { tkAddWeight(); RENDER.home(); }
+function dashboardCard() {
+  const d = tkLoad(); const day = (d.log[tkToday()] || { good: {}, bad: {} });
+  const goodDone = Object.values(day.good || {}).filter(Boolean).length;
+  const chips = d.good.map((g) => `<span onclick="hmGood('${g.id}')" style="display:inline-flex;align-items:center;gap:4px;margin:3px 5px 3px 0;padding:6px 10px;border-radius:13px;cursor:pointer;border:1px solid ${day.good[g.id] ? "var(--red)" : "var(--line,#eee)"};background:${day.good[g.id] ? "var(--red)" : "#fff"};color:${day.good[g.id] ? "#fff" : "var(--ink,#222)"};font-size:12px;font-weight:600"><i class="ti ti-${day.good[g.id] ? "check" : "plus"}"></i>${esc(g.title)}</span>`).join("");
+  const bad = d.bad.map((b) => { const v = day.bad[b.id]; return `<div class="row spread" style="margin:5px 0"><span style="font-weight:600">${esc(b.title)} ${v == null ? "" : v === 0 ? '<b style="color:#1F9D55">чисто</b>' : '<b style="color:var(--red)">' + v + "</b>"}</span><span><button class="btn ghost" style="padding:4px 9px;font-size:12px" onclick="hmClean('${b.id}')">Чисто</button> <button class="btn ghost" style="padding:4px 9px;font-size:12px" onclick="hmAmount('${b.id}')">＋</button></span></div>`; }).join("");
+  const W = d.weight || { log: {} }; const wk = Object.keys(W.log || {}).sort(); const wcur = wk.length ? W.log[wk[wk.length - 1]] : null;
+  const wline = `<div class="row spread" style="margin-top:8px"><span class="lbl">Вес: <b>${wcur != null ? wcur + " кг" : "—"}</b>${W.goal != null ? " · цель " + W.goal : ""}</span><button class="btn ghost" style="padding:4px 10px;font-size:12px" onclick="hmWeight()">＋ вес</button></div>`;
+  const nx = (typeof hsNext === "function") ? hsNext() : null;
+  const savedMonth = d.bad.reduce((s, b) => s + (b.price ? tkSaved(b.id, tkToday().slice(0, 7)) : 0), 0);
+  return `<div class="card" style="margin-top:4px">
+    <div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-layout-grid" style="color:var(--red);margin-right:6px"></i>Рабочий стол · ур. ${tkLevel()}</div><span class="lbl">${goodDone}/${d.good.length} привычек</span></div>
+    <div style="display:flex;gap:6px;margin-top:8px"><input id="hm_task" placeholder="Быстрая задача…" style="flex:1" onkeydown="if(event.key==='Enter')hmAddTask()"><button class="btn red" style="padding:8px 12px" onclick="hmAddTask()">＋</button></div>
+    <div style="margin-top:10px">${chips}</div>
+    <div style="margin-top:8px">${bad}</div>
+    ${wline}
+    ${savedMonth > 0 ? `<div class="lbl" style="margin-top:8px">Сэкономлено в этом месяце: <b style="color:#1F9D55">${savedMonth} ₽</b></div>` : ""}
+    ${nx ? `<div class="lbl" style="margin-top:8px">Чекап: ${esc(nx.title)} · ${hsDdl(nx.nextDate)}</div>` : ""}
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn red" style="flex:1;padding:8px" onclick="tkReportForm()">Вечерний отчёт</button><button class="btn ghost" style="flex:1;padding:8px" onclick="show('track')">Трекер</button></div>
+  </div>`;
 }

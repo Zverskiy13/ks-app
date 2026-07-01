@@ -184,3 +184,196 @@ h1.h{font-size:31px;font-weight:800;letter-spacing:-1.15px;line-height:1.03;marg
   .metrics{grid-template-columns:1fr;}
   .pad{grid-template-columns:repeat(3,68px);gap:13px}.key{height:68px;border-radius:22px;}
 }
+
+/* =========================================================
+   v29 DESIGN ONLY UPDATE · Executive Workspace
+   Только визуальный слой: backend/app logic/ids/classes не менялись.
+   ========================================================= */
+:root{
+  --red:#E1191C;
+  --red-brand:#E31E24;
+  --red-dark:#B71318;
+  --red-soft:rgba(225,25,28,.08);
+  --red-softer:rgba(225,25,28,.045);
+  --ink:#161514;
+  --black:#2B2A29;
+  --muted:#70737B;
+  --muted-2:#A0A4AE;
+  --line:rgba(22,21,20,.075);
+  --line-strong:rgba(22,21,20,.12);
+  --bg:#F5F5F3;
+  --bg-2:#ECECE9;
+  --card:#FFFFFF;
+  --surface:#FBFBFA;
+  --amber:#D98A18;
+  --green:#178C5A;
+  --shadow:0 24px 70px rgba(18,17,16,.085);
+  --shadow-soft:0 12px 34px rgba(18,17,16,.058);
+  --r:28px;
+  --r-sm:20px;
+  --r-xs:14px;
+}
+
+html,body{
+  background:
+    radial-gradient(circle at 12% -10%, rgba(225,25,28,.10), transparent 30%),
+    radial-gradient(circle at 108% 8%, rgba(43,42,41,.10), transparent 28%),
+    linear-gradient(180deg,#FFFFFF 0%,#F6F6F3 45%,#EFEFEB 100%) !important;
+  color:var(--ink) !important;
+}
+
+.app{
+  max-width:520px !important;
+  background:
+    radial-gradient(circle at 24px 96px, rgba(225,25,28,.10), transparent 26%),
+    linear-gradient(180deg,#FEFEFD 0%,#F6F6F3 46%,#EFEFEB 100%) !important;
+  box-shadow:0 0 0 1px rgba(43,42,41,.05),0 30px 90px rgba(18,17,16,.08);
+}
+.app:before{
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.74), transparent 44%),
+    radial-gradient(circle at 88% 18%, rgba(225,25,28,.09), transparent 22%) !important;
+}
+body:before{opacity:.025 !important;}
+
+.hdr{
+  padding:16px 20px 13px !important;
+  background:rgba(254,254,253,.78) !important;
+  border-bottom:1px solid rgba(43,42,41,.06) !important;
+  box-shadow:0 12px 34px rgba(18,17,16,.045) !important;
+}
+.logo{
+  width:46px !important;height:46px !important;border-radius:18px !important;
+  background:#fff url('icons/ks-logo.jpg') center/contain no-repeat !important;
+  box-shadow:0 12px 28px rgba(225,25,28,.12), inset 0 0 0 1px rgba(225,25,28,.05) !important;
+}
+.brand .nm{font-size:13px !important;letter-spacing:.5px !important;font-weight:850 !important;}
+.role{
+  color:var(--black) !important;background:rgba(255,255,255,.72) !important;
+  border:1px solid rgba(43,42,41,.07) !important;box-shadow:none !important;
+}
+.role:before{content:"";width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:2px;}
+#addBtn{width:38px !important;height:38px !important;border-radius:16px !important;box-shadow:0 14px 28px rgba(225,25,28,.22)!important;}
+
+.scroll{padding:13px 20px 112px !important;}
+h1.h{
+  margin:10px 0 18px !important;font-size:34px !important;line-height:.98 !important;
+  font-weight:900 !important;letter-spacing:-1.4px !important;color:#111 !important;
+}
+.sub{font-size:11px !important;color:#858891 !important;letter-spacing:.12em !important;margin-top:8px !important;}
+
+.card,.metric,.pulse-card,.dl,.cal-d,.mbtn,.qa{
+  background:rgba(255,255,255,.88) !important;
+  border:1px solid rgba(255,255,255,.78) !important;
+  box-shadow:var(--shadow-soft) !important;
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.card{
+  border-radius:28px !important;padding:17px 18px !important;margin-bottom:16px !important;
+}
+.card:hover,.qa:hover,.pulse-card:hover{transform:translateY(-1px);}
+.sec-title{font-size:14px !important;letter-spacing:-.1px !important;margin:9px 3px 12px !important;}
+.lbl,.li .m,.m{color:var(--muted) !important;}
+.li{padding:15px 0 !important;border-bottom:1px solid rgba(22,21,20,.06) !important;}
+.li .t,.t{font-weight:720 !important;color:#191817 !important;}
+
+/* Больше похоже на рабочий стол собственника: плотные KPI + ИИ-сводка */
+.director-note{
+  border-radius:30px !important;
+  padding:19px 18px !important;
+  background:
+    radial-gradient(circle at 92% 10%, rgba(225,25,28,.42), transparent 28%),
+    linear-gradient(135deg,#151413 0%,#2B2A29 60%,#3A1516 100%) !important;
+  box-shadow:0 24px 60px rgba(20,19,18,.22) !important;
+}
+.director-note .k{font-size:10px !important;letter-spacing:.16em !important;color:rgba(255,255,255,.56)!important;}
+.director-note .v{font-size:16px !important;line-height:1.44 !important;font-weight:760 !important;}
+.director-note .link{color:#fff !important;opacity:.86;}
+
+.board-pulse{grid-template-columns:1fr 1fr !important;gap:12px !important;margin-bottom:16px !important;}
+.pulse-card{border-radius:26px !important;padding:16px !important;min-height:116px;}
+.pulse-card:after{right:-20px !important;top:-22px !important;width:96px !important;height:96px !important;background:rgba(225,25,28,.07)!important;}
+.pulse-card .k,.metric .lbl{text-transform:uppercase;letter-spacing:.11em;font-size:9.5px !important;font-weight:850 !important;color:#888B93!important;}
+.pulse-card .n{font-size:33px !important;font-weight:920 !important;letter-spacing:-1.4px !important;margin-top:10px !important;}
+.pulse-card .m{font-size:11.5px !important;}
+
+.hero{border-radius:31px !important;box-shadow:var(--shadow) !important;border:1px solid rgba(255,255,255,.82)!important;}
+.hero .top{
+  padding:20px 18px !important;
+  background:linear-gradient(135deg,#191817 0%,#2B2A29 62%,#711618 100%) !important;
+}
+.hero .v{font-size:18px !important;font-weight:820 !important;letter-spacing:-.35px;}
+.hero .bot{padding:14px 17px !important;}
+
+.qa-row{gap:12px !important;margin-bottom:20px !important;}
+.qa{border-radius:24px !important;padding:15px 8px !important;color:#4E5158 !important;}
+.qa i{background:rgba(225,25,28,.075)!important;color:var(--red)!important;border-radius:16px !important;}
+
+.metrics{gap:12px !important;margin-bottom:18px !important;}
+.metric{border-radius:24px !important;padding:16px 14px !important;}
+.metric .n{font-size:23px !important;font-weight:920 !important;letter-spacing:-.9px !important;}
+.big{font-size:39px !important;font-weight:920 !important;letter-spacing:-1.7px !important;}
+.bar{height:11px !important;background:rgba(43,42,41,.08) !important;}
+.bar>span{background:linear-gradient(90deg,var(--red),#FF5A4E)!important;}
+
+.btn{border-radius:18px !important;font-weight:850 !important;}
+.btn.red{background:linear-gradient(135deg,var(--red),var(--red-dark))!important;box-shadow:0 16px 34px rgba(225,25,28,.2)!important;}
+.btn.ghost{background:rgba(255,255,255,.78)!important;border:1px solid rgba(43,42,41,.09)!important;}
+.link{color:var(--red)!important;font-weight:850!important;}
+.chk{width:30px!important;height:30px!important;background:#fff!important;border-color:rgba(43,42,41,.16)!important;}
+.chk.done{background:linear-gradient(135deg,var(--red),var(--red-dark))!important;}
+.tcell{font-weight:880!important;color:var(--red)!important;}
+
+.seg{background:rgba(43,42,41,.052)!important;border-radius:19px!important;padding:5px!important;}
+.seg b{border-radius:15px!important;font-weight:820!important;}
+.seg b.on{box-shadow:0 10px 22px rgba(18,17,16,.07)!important;}
+
+.nav{
+  max-width:520px !important;
+  padding:9px 8px calc(9px + env(safe-area-inset-bottom)) !important;
+  background:rgba(255,255,255,.82)!important;border-top:1px solid rgba(43,42,41,.06)!important;
+  box-shadow:0 -18px 45px rgba(18,17,16,.08)!important;
+}
+.nav button{border-radius:18px!important;font-size:9.5px!important;font-weight:820!important;color:#A0A3AA!important;}
+.nav button i{font-size:22px!important;}
+.nav button.on{background:rgba(225,25,28,.075)!important;color:var(--red)!important;}
+
+.login{background:radial-gradient(circle at 50% 20%, rgba(225,25,28,.12), transparent 28%),linear-gradient(180deg,#fff,#F4F4F1)!important;}
+.login h2{font-weight:900!important;letter-spacing:.7px!important;}
+.key{border-radius:26px!important;box-shadow:0 14px 32px rgba(18,17,16,.065)!important;}
+.dot.f{box-shadow:0 0 0 5px rgba(225,25,28,.08)!important;}
+
+.sheet-bg{background:rgba(17,17,17,.38)!important;}
+.sheet{border-radius:32px 32px 0 0!important;box-shadow:0 -24px 70px rgba(18,17,16,.2)!important;}
+#create input,#s-journal input,textarea,select{
+  border:1px solid rgba(43,42,41,.10)!important;border-radius:18px!important;background:#FAFAF8!important;
+  font-family:inherit!important;color:var(--ink)!important;
+}
+#create input:focus,#s-journal input:focus,textarea:focus,select:focus{outline:none!important;border-color:rgba(225,25,28,.34)!important;box-shadow:0 0 0 4px rgba(225,25,28,.07)!important;background:#fff!important;}
+
+.cal{gap:7px!important;}
+.cal-d{border-radius:17px!important;font-weight:820!important;box-shadow:0 8px 18px rgba(18,17,16,.035)!important;}
+.cal-d.tod{box-shadow:0 0 0 4px rgba(225,25,28,.045)!important;}
+.cal-d.sel{background:linear-gradient(135deg,var(--red),var(--red-dark))!important;box-shadow:0 13px 26px rgba(225,25,28,.20)!important;}
+.mbtn{border-radius:17px!important;}
+
+/* Inline cards in new AI/health/track sections become cleaner without touching JS */
+[onclick]{-webkit-user-select:none;user-select:none;}
+.card [style*="background:#f8f8f8"], .card [style*="background:#f7f7f7"], .card [style*="background:#f0f0f0"]{background:#F7F7F5!important;}
+.card [style*="border-radius:12px"]{border-radius:18px!important;}
+.card [style*="border-radius:14px"]{border-radius:18px!important;}
+.card [style*="border-radius:10px"]{border-radius:14px!important;}
+
+@media (min-width:760px){
+  .app{max-width:620px!important;}
+  .nav{max-width:620px!important;}
+  .scroll{padding-left:24px!important;padding-right:24px!important;}
+  h1.h{font-size:38px!important;}
+  .board-pulse,.metrics{grid-template-columns:repeat(2,1fr)!important;}
+}
+@media (max-width:370px){
+  .scroll{padding-left:15px!important;padding-right:15px!important;}
+  h1.h{font-size:30px!important;}
+  .board-pulse{gap:9px!important;}
+  .pulse-card .n{font-size:29px!important;}
+}

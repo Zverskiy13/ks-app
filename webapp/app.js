@@ -134,10 +134,10 @@ const RENDER = {
     for (let d = 1; d <= dim; d++) {
       const iso = `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       const st = status[iso], past = iso < today;
-      let sty = "";
-      if (past && st === "done") sty = ' style="background:#1F9D55;color:#fff"';
-      else if (past && st === "pending") sty = ' style="background:#FBE3E1;color:#C0392B;font-weight:700"';
-      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}"${sty} onclick="pickDay('${iso}')"><span>${d}</span>${marks.has(iso) ? '<span class="cal-dot"></span>' : ''}</button>`;
+      let numSty = "", dotSty = "";
+      if (past && st === "done") { numSty = "color:#1F9D55!important;font-weight:800"; dotSty = "background:#1F9D55!important"; }
+      else if (past && st === "pending") { numSty = "color:#C0392B!important;font-weight:800"; dotSty = "background:#C0392B!important"; }
+      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')"><span style="${numSty}">${d}</span>${marks.has(iso) ? `<span class="cal-dot" style="${dotSty}"></span>` : ''}</button>`;
     }
     el("s-day").innerHTML = `
       <div class="row spread" style="margin:8px 0 10px">

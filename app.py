@@ -1448,6 +1448,176 @@ def finance_agg(user: str = "", ym: str = "", mode: str = "month", date: str = "
     return {"ok": True, "ym": ym, "mode": mode, "date": d, "dates": dates, "rows": rows, "totals": totals}
 
 
+# ---------- АГЕНТ: ежедневный отчёт по марже с почты (IMAP + .xls) ----------
+def _agg_num(s):
+    s = str(s or "").replace("\n", "").replace("\xa0", "").replace(" ", "").replace(",", ".").strip()
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def _agg_region(cat, name):
+    t = (str(name) + " " + str(cat))
+    kal = ["Калмык", "Элист", "Лагань", "Городовиков", "Цаган-Аман", "Яшкул", "Яшалт", "Комсомольск", "Приютное"]
+    chn = ["Грозн", "Гудермес", "Хасавюрт", "Ачхой", "Серновод", "СклифЛаб", "АРЦ", "НЕОМЕД", "Чечн", "Вайнах"]
+    kbr = ["Нальчик", "Баксан", "Прохладн", "Учкекен", "Майский", "КБР", "Головко", "Назрань"]
+    msk = ["Павелецк", "Каширск", "Москв", "Профосмотр", "Европейск", "Чайхон", "Титан"]
+    for k in kal:
+        if k in t:
+            return "Калмыкия"
+    for k in chn:
+        if k in t:
+            return "Чечня"
+    for k in kbr:
+        if k in t:
+            return "КБР"
+    if "Астрахан" in t:
+        return "Астрахань"
+    for k in msk:
+        if k in t:
+            return "Москва"
+    return "Прочее"
+
+
+def _agg_segment(cat):
+    return "корпы" if "корп" in str(cat).lower() else "медцентры"
+
+
+def _agg_parse_xls(raw):
+    """Разбор .xls отчёта -> строки, агрегированные по (регион, сегмент)."""
+    import xlrd
+    book = xlrd.open_workbook(file_contents=raw)
+    sh = book.sheet_by_index(0)
+    hdr = None
+    cols = {}
+    for ri in range(min(sh.nrows, 30)):
+        vals = [str(sh.cell_value(ri, ci)).strip().lower() for ci in range(sh.ncols)]
+        joined = " ".join(vals)
+        if "наименование" in joined and ("счет" in joined or "счёт" in joined):
+            hdr = ri
+            for ci, v in enumerate(vals):
+                if "наименование" in v:
+                    cols["name"] = ci
+                elif ("по счет" in v or "по счёт" in v or "сумма по счет" in v) and "rev" not in cols:
+                    cols["rev"] = ci
+                elif "себестоим" in v:
+                    cols["cost"] = ci
+            break
+    if hdr is None or "name" not in cols or "rev" not in cols or "cost" not in cols:
+        return []
+    agg = {}
+    cat = None
+    for ri in range(hdr + 1, sh.nrows):
+        name = str(sh.cell_value(ri, cols["name"])).replace("\n", " ").strip()
+        if not name:
+            continue
+        if "ИТОГО" in name.upper():
+            continue
+        rev = _agg_num(sh.cell_value(ri, cols["rev"]))
+        cost = _agg_num(sh.cell_value(ri, cols["cost"]))
+        if rev is None and cost is None:
+            cat = name
+            continue
+        reg = _agg_region(cat, name)
+        seg = _agg_segment(cat)
+        key = (reg, seg)
+        a = agg.setdefault(key, [0, 0])
+        a[0] += rev or 0
+        a[1] += cost or 0
+    return [{"region": r, "clinic": s, "revenue": round(v[0]), "cost": round(v[1])}
+            for (r, s), v in agg.items()]
+
+
+def _agg_fetch_latest_xls():
+    import imaplib
+    import email as _email
+    user = os.environ.get("MAIL_USER", "")
+    pwd = os.environ.get("MAIL_APP_PASSWORD", "")
+    if not (user and pwd):
+        return None, {"error": "MAIL_USER / MAIL_APP_PASSWORD не заданы"}
+    sender = os.environ.get("MAIL_FROM", "result@stoclinic.ru")
+    host = os.environ.get("MAIL_IMAP", "imap.gmail.com")
+    try:
+        M = imaplib.IMAP4_SSL(host)
+        M.login(user, pwd)
+        M.select("INBOX")
+        typ, dat = M.search(None, f'(FROM "{sender}")')
+        ids = dat[0].split()
+        if not ids:
+            M.logout()
+            return None, {"error": f"письма от {sender} не найдены"}
+        typ, msgdat = M.fetch(ids[-1], "(RFC822)")
+        raw = msgdat[0][1]
+        M.logout()
+        msg = _email.message_from_bytes(raw)
+        # дата данных = дата письма минус сутки (отчёт «за сутки»)
+        dd = None
+        try:
+            tup = _email.utils.parsedate_to_datetime(msg.get("Date"))
+            dd = (tup.date() - dt.timedelta(days=1)).isoformat()
+        except Exception:
+            dd = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+        for part in msg.walk():
+            fn = part.get_filename() or ""
+            try:
+                import email.header as _eh
+                if fn:
+                    fn = str(_eh.make_header(_eh.decode_header(fn)))
+            except Exception:
+                pass
+            if fn.lower().endswith(".xls") or fn.lower().endswith(".xlsx"):
+                payload = part.get_payload(decode=True)
+                if payload:
+                    return payload, {"date": dd, "file": fn, "from": sender}
+        return None, {"error": "вложение .xls не найдено"}
+    except Exception as e:
+        return None, {"error": "IMAP: " + str(e)[:160]}
+
+
+def _agg_email_pull():
+    raw, meta = _agg_fetch_latest_xls()
+    if raw is None:
+        return {"ok": False, "error": meta.get("error", "нет данных")}
+    try:
+        rows = _agg_parse_xls(raw)
+    except Exception as e:
+        return {"ok": False, "error": "разбор .xls: " + str(e)[:160]}
+    if not rows or sum(r["revenue"] for r in rows) <= 0:
+        return {"ok": False, "error": "файл разобран, но данных не найдено"}
+    d = meta.get("date") or dt.date.today().isoformat()
+    ym = d[:7]
+    store = load_json(_agg_path(ym), {})
+    store[d] = {"rows": rows, "source": "email:" + meta.get("from", ""),
+                "ts": dt.datetime.now().isoformat(timespec="minutes")}
+    ok = gh_write(_agg_path(ym), json.dumps(store, ensure_ascii=False, indent=2), f"agg email {d}")
+    rev = sum(r["revenue"] for r in rows)
+    cost = sum(r["cost"] for r in rows)
+    return {"ok": ok, "date": d, "rows": len(rows), "revenue": rev, "cost": cost,
+            "margin": rev - cost, "pct": round((rev - cost) / rev * 100, 1) if rev else 0,
+            "file": meta.get("file", "")}
+
+
+@app.get("/api/finance/pull")
+def finance_pull(user: str = ""):
+    if by_id(user).get("role") != "owner":
+        return {"ok": False, "error": "Доступно только владельцу"}
+    return _agg_email_pull()
+
+
+def _agg_email_daily():
+    if not os.environ.get("MAIL_APP_PASSWORD"):
+        return
+    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
+    if now.hour < 7:
+        return
+    mark = f"state/finance/pulled-{now.date().isoformat()}.json"
+    if load_json(mark, None) is not None:
+        return
+    res = _agg_email_pull()
+    gh_write(mark, json.dumps(res, ensure_ascii=False), "agg: email pulled")
+
+
 # ---------- пуш напоминаний по времени (как у бота, в приложение) ----------
 # ---------- ИИ-ПОМОЩНИК: разбор всех процессов владельца ----------
 def _owner_id():
@@ -1649,6 +1819,7 @@ def _push_reminders_loop():
                     gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминания отправлены")
             _assistant_daily()
             _evening_push()
+            _agg_email_daily()
         except Exception as e:
             print(f"push reminders: {e}")
         _time.sleep(60)

@@ -490,17 +490,22 @@ def agenda_add(b: AddBlock):
 @app.get("/api/month")
 def month(ym: str = ""):
     ym = ym or dt.date.today().isoformat()[:7]
-    dates = set()
+    tot, pend = {}, {}
+
+    def bump(dte, done):
+        tot[dte] = tot.get(dte, 0) + 1
+        if not done:
+            pend[dte] = pend.get(dte, 0) + 1
+
     for a in load_json("state/agenda.json", []):
         if a.get("start") and str(a.get("date", ""))[:7] == ym:
-            dates.add(a["date"])
+            bump(a["date"], bool(a.get("done")))
     for r in load_json("state/reminders.json", []):
-        if r.get("done"):
-            continue
         w = r.get("when", "")
-        if len(w) >= 10 and w[:7] == ym:
-            dates.add(w[:10])
-    return {"dates": sorted(dates)}
+        if len(w) >= 10 and "T" in w and w[:7] == ym:
+            bump(w[:10], bool(r.get("done")))
+    status = {d: ("pending" if pend.get(d, 0) > 0 else "done") for d in tot}
+    return {"dates": sorted(tot.keys()), "status": status}
 
 
 class Note(BaseModel):

@@ -123,6 +123,7 @@ const RENDER = {
     window.__dayItems = dd.items || [];
     const mk = await API.month(viewYM);
     const marks = new Set(mk.dates || []);
+    const status = mk.status || {};
     const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
     const [Y, M] = viewYM.split("-").map(Number);
     const startW = (new Date(Y, M - 1, 1).getDay() + 6) % 7;
@@ -132,7 +133,11 @@ const RENDER = {
     for (let i = 0; i < startW; i++) cells += "<div></div>";
     for (let d = 1; d <= dim; d++) {
       const iso = `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')"><span>${d}</span>${marks.has(iso) ? '<span class="cal-dot"></span>' : ''}</button>`;
+      const st = status[iso], past = iso < today;
+      let sty = "";
+      if (past && st === "done") sty = ' style="background:#1F9D55;color:#fff"';
+      else if (past && st === "pending") sty = ' style="background:#FBE3E1;color:#C0392B;font-weight:700"';
+      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}"${sty} onclick="pickDay('${iso}')"><span>${d}</span>${marks.has(iso) ? '<span class="cal-dot"></span>' : ''}</button>`;
     }
     el("s-day").innerHTML = `
       <div class="row spread" style="margin:8px 0 10px">
@@ -142,6 +147,7 @@ const RENDER = {
       </div>
       <div class="cal-h">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map((w) => `<div>${w}</div>`).join("")}</div>
       <div class="cal">${cells}</div>
+      <div class="lbl" style="padding:6px 2px 0"><span style="color:#1F9D55">■</span> всё сделано &nbsp; <span style="color:#C0392B">■</span> остались невыполненные — нажми на день, чтобы перенести</div>
       <div class="row spread" style="margin:16px 0 8px"><div style="font-weight:600">${dayLabel(curDay)}</div><button onclick="openCreate({type:'block', date: curDay})" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ в сетку</button></div>
       <div class="card" style="padding:6px 16px">
         ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc;cursor:pointer" onclick="editItem(${i})"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}

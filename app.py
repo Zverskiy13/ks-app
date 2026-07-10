@@ -245,12 +245,67 @@ def login(b: Login):
 
 
 @app.get("/api/today")
+def _occurs(a, d):
+    """Является ли дата d (YYYY-MM-DD) вхождением блока сетки a (с учётом повтора)."""
+    rep = a.get("repeat")
+    if not rep:
+        return a.get("date") == d
+    if d in (a.get("skip_dates") or []):
+        return False
+    dates = rep.get("dates")
+    if dates:
+        return d in dates
+    try:
+        da = dt.date.fromisoformat(a.get("date", ""))
+        dd = dt.date.fromisoformat(d)
+    except Exception:
+        return False
+    if dd < da:
+        return False
+    every = int(rep.get("every") or 1) or 1
+    unit = rep.get("unit") or "day"
+    if unit == "day":
+        return (dd - da).days % every == 0
+    if unit == "week":
+        return (dd - da).days % (7 * every) == 0
+    if unit == "month":
+        if dd.day != da.day:
+            return False
+        months = (dd.year - da.year) * 12 + (dd.month - da.month)
+        return months >= 0 and months % every == 0
+    return False
+
+
+def _occ_done(a, d):
+    """Отмечено ли конкретное вхождение (дата d) как выполненное."""
+    if a.get("repeat"):
+        return d in (a.get("done_dates") or [])
+    return bool(a.get("done"))
+
+
+def _repeat_label(rep):
+    if not rep:
+        return ""
+    if rep.get("dates"):
+        return "по датам (%d)" % len(rep["dates"])
+    every = int(rep.get("every") or 1)
+    unit = {"day": "дн.", "week": "нед.", "month": "мес."}.get(rep.get("unit") or "day", "дн.")
+    if unit == "дн." and every == 1:
+        return "каждый день"
+    return "каждые %d %s" % (every, unit)
+
+
+def _match_block(a, kind_date, start, text):
+    """Найти блок по (старт, текст) с учётом того, что kind_date — дата вхождения."""
+    return a.get("start") == start and a.get("text", "") == text and _occurs(a, kind_date)
+
+
 def today(user: str = ""):
     profile = by_id(user)
     today_iso = dt.date.today().isoformat()
     agenda = []
     for a in load_json("state/agenda.json", []):
-        if a.get("date") == today_iso and a.get("start") and not a.get("done"):
+        if a.get("start") and _occurs(a, today_iso) and not _occ_done(a, today_iso):
             if profile["role"] == "owner" or can_company(profile, a.get("company", "")) or not a.get("company"):
                 agenda.append({"time": a["start"], "text": a.get("text", ""), "icon": "ti-clock"})
     agenda.sort(key=lambda x: x["time"])
@@ -512,12 +567,18 @@ class AddBlock(BaseModel):
     start: str
     end: str = ""
     text: str
+    repeat: dict | None = None      # {every:N, unit:"day|week|month"} | {dates:[...]}
 
 
 @app.post("/api/agenda/add")
 def agenda_add(b: AddBlock):
     ag = load_json("state/agenda.json", [])
-    ag.append({"date": b.date, "start": b.start, "end": (b.end or None), "text": b.text.strip()})
+    entry = {"date": b.date, "start": b.start, "end": (b.end or None), "text": b.text.strip()}
+    if b.repeat and (b.repeat.get("dates") or b.repeat.get("every")):
+        entry["repeat"] = b.repeat
+        entry["done_dates"] = []
+        entry["skip_dates"] = []
+    ag.append(entry)
     return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок в сетку")}
 
 
@@ -531,8 +592,21 @@ def month(ym: str = ""):
         if not done:
             pend[dte] = pend.get(dte, 0) + 1
 
+    try:
+        y0, m0 = int(ym[:4]), int(ym[5:7])
+        first = dt.date(y0, m0, 1)
+        nxt = dt.date(y0 + 1, 1, 1) if m0 == 12 else dt.date(y0, m0 + 1, 1)
+        month_days = [(first + dt.timedelta(days=i)).isoformat() for i in range((nxt - first).days)]
+    except Exception:
+        month_days = []
     for a in load_json("state/agenda.json", []):
-        if a.get("start") and str(a.get("date", ""))[:7] == ym:
+        if not a.get("start"):
+            continue
+        if a.get("repeat"):
+            for dstr in month_days:
+                if _occurs(a, dstr):
+                    bump(dstr, _occ_done(a, dstr))
+        elif str(a.get("date", ""))[:7] == ym:
             bump(a["date"], bool(a.get("done")))
     for r in load_json("state/reminders.json", []):
         w = r.get("when", "")
@@ -569,10 +643,15 @@ def item_move(b: ItemMove):
     if b.kind == "block":
         ag = load_json("state/agenda.json", [])
         for a in ag:
-            if a.get("date") == b.date and a.get("start") == b.start and a.get("text", "") == b.text:
-                a["date"] = b.new_date
-                a["start"] = b.new_start
-                a["end"] = b.new_end or None
+            if _match_block(a, b.date, b.start, b.text):
+                if a.get("repeat"):
+                    # перенос одного вхождения серии: снять этот день + разовый блок на новом месте
+                    a.setdefault("skip_dates", []).append(b.date)
+                    ag.append({"date": b.new_date, "start": b.new_start, "end": (b.new_end or None), "text": b.text})
+                else:
+                    a["date"] = b.new_date
+                    a["start"] = b.new_start
+                    a["end"] = b.new_end or None
                 return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: перенос блока")}
         return {"ok": False, "reason": "not found"}
     else:
@@ -590,16 +669,21 @@ class ItemDel(BaseModel):
     date: str
     start: str
     text: str
+    scope: str = "one"      # "one" — только этот день; "series" — вся серия повтора
 
 
 @app.post("/api/item/delete")
 def item_delete(b: ItemDel):
     if b.kind == "block":
         ag = load_json("state/agenda.json", [])
-        new = [a for a in ag if not (a.get("date") == b.date and a.get("start") == b.start and a.get("text", "") == b.text)]
-        if len(new) == len(ag):
-            return {"ok": False, "reason": "not found"}
-        return {"ok": gh_write("state/agenda.json", json.dumps(new, ensure_ascii=False, indent=2), "app: удалён блок")}
+        for a in ag:
+            if _match_block(a, b.date, b.start, b.text):
+                if a.get("repeat") and b.scope != "series":
+                    a.setdefault("skip_dates", []).append(b.date)  # убрать только это вхождение
+                    return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: снят день повтора")}
+                new = [x for x in ag if x is not a]
+                return {"ok": gh_write("state/agenda.json", json.dumps(new, ensure_ascii=False, indent=2), "app: удалён блок")}
+        return {"ok": False, "reason": "not found"}
     else:
         rems = load_json("state/reminders.json", [])
         new = [r for r in rems if not (r.get("when", "")[:10] == b.date and r.get("when", "")[11:16] == b.start and r.get("text", "") == b.text)]
@@ -625,8 +709,13 @@ def day(user: str = "", date: str = ""):
     d = date or dt.date.today().isoformat()
     items = []
     for a in load_json("state/agenda.json", []):
-        if a.get("date") == d and a.get("start") and not a.get("done"):
-            items.append({"start": a["start"], "end": a.get("end"), "text": a.get("text", ""), "kind": "block"})
+        if a.get("start") and _occurs(a, d) and not _occ_done(a, d):
+            row = {"start": a["start"], "end": a.get("end"), "text": a.get("text", ""), "kind": "block"}
+            if a.get("repeat"):
+                row["recurring"] = True
+                row["repeat"] = a["repeat"]
+                row["repeat_label"] = _repeat_label(a["repeat"])
+            items.append(row)
     for r in load_json("state/reminders.json", []):
         if r.get("done"):
             continue
@@ -661,8 +750,9 @@ def day(user: str = "", date: str = ""):
     # выполненные за этот день (из сетки и напоминаний) — для разбора «что сделано»
     done_items = []
     for a in load_json("state/agenda.json", []):
-        if a.get("date") == d and a.get("start") and a.get("done"):
-            done_items.append({"start": a["start"], "text": a.get("text", ""), "kind": "block"})
+        if a.get("start") and _occurs(a, d) and _occ_done(a, d):
+            done_items.append({"start": a["start"], "text": a.get("text", ""), "kind": "block",
+                               "recurring": bool(a.get("repeat"))})
     for r in load_json("state/reminders.json", []):
         w = r.get("when", "")
         if r.get("done") and len(w) >= 16 and w[:10] == d and "T" in w:
@@ -784,8 +874,13 @@ def item_done(b: ItemDone):
     if b.kind == "block":
         ag = load_json("state/agenda.json", [])
         for a in ag:
-            if a.get("date") == b.date and a.get("start") == b.start and a.get("text", "") == b.text:
-                a["done"] = True
+            if _match_block(a, b.date, b.start, b.text):
+                if a.get("repeat"):
+                    dd = a.setdefault("done_dates", [])
+                    if b.date not in dd:
+                        dd.append(b.date)
+                else:
+                    a["done"] = True
                 return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок выполнен")}
         return {"ok": False, "reason": "not found"}
     else:
@@ -795,6 +890,62 @@ def item_done(b: ItemDone):
             if w[:10] == b.date and w[11:16] == b.start and r.get("text", "") == b.text:
                 r["done"] = True
                 return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминание выполнено")}
+        return {"ok": False, "reason": "not found"}
+
+
+@app.post("/api/item/undone")
+def item_undone(b: ItemDone):
+    """Вернуть выполненный элемент сетки обратно в работу."""
+    if b.kind == "block":
+        ag = load_json("state/agenda.json", [])
+        for a in ag:
+            if _match_block(a, b.date, b.start, b.text):
+                if a.get("repeat"):
+                    a["done_dates"] = [x for x in (a.get("done_dates") or []) if x != b.date]
+                else:
+                    a["done"] = False
+                return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок возвращён")}
+        return {"ok": False, "reason": "not found"}
+    else:
+        rems = load_json("state/reminders.json", [])
+        for r in rems:
+            w = r.get("when", "")
+            if w[:10] == b.date and w[11:16] == b.start and r.get("text", "") == b.text:
+                r["done"] = False
+                return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминание возвращено")}
+        return {"ok": False, "reason": "not found"}
+
+
+class ItemEdit(BaseModel):
+    kind: str
+    date: str
+    start: str
+    text: str
+    new_text: str
+    new_start: str
+    new_end: str = ""
+
+
+@app.post("/api/item/edit")
+def item_edit(b: ItemEdit):
+    """Правка блока на месте (текст/время), сохраняя повтор и историю выполнений."""
+    if b.kind == "block":
+        ag = load_json("state/agenda.json", [])
+        for a in ag:
+            if _match_block(a, b.date, b.start, b.text):
+                a["start"] = b.new_start
+                a["end"] = (b.new_end or None)
+                a["text"] = (b.new_text or "").strip() or a.get("text", "")
+                return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: правка блока")}
+        return {"ok": False, "reason": "not found"}
+    else:
+        rems = load_json("state/reminders.json", [])
+        for r in rems:
+            w = r.get("when", "")
+            if w[:10] == b.date and w[11:16] == b.start and r.get("text", "") == b.text:
+                r["when"] = f"{b.date}T{b.new_start}"
+                r["text"] = (b.new_text or "").strip() or r.get("text", "")
+                return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: правка напоминания")}
         return {"ok": False, "reason": "not found"}
 
 

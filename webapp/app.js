@@ -121,6 +121,7 @@ const RENDER = {
   async day() {
     const dd = await API.day(curDay);
     window.__dayItems = dd.items || [];
+    window.__dayDone = dd.done || [];
     const mk = await API.month(viewYM);
     const marks = new Set(mk.dates || []);
     const status = mk.status || {};
@@ -150,11 +151,12 @@ const RENDER = {
       <div class="lbl" style="padding:6px 2px 0"><span style="color:#1F9D55">■</span> всё сделано &nbsp; <span style="color:#C0392B">■</span> остались невыполненные — нажми на день, чтобы перенести</div>
       <div class="row spread" style="margin:16px 0 8px"><div style="font-weight:600">${dayLabel(curDay)}</div><button onclick="openCreate({type:'block', date: curDay})" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ в сетку</button></div>
       <div class="card" style="padding:6px 16px">
-        ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc;cursor:pointer" onclick="editItem(${i})"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
+        ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}${it.recurring ? ` <span class="lbl" style="color:var(--red)" title="Повтор">🔁 ${esc(it.repeat_label || '')}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc;cursor:pointer" onclick="editItem(${i})"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
       ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}
       ${dd.done && dd.done.length ? `<div class="sec-title" style="margin-top:10px">✓ Выполнено в этот день (${dd.done.length})</div>
-      <div class="card" style="padding:4px 16px">${dd.done.map((it) => `<div class="li"><span class="chk done"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}</span></div>`).join("")}</div>` : ""}`;
+      <div class="card" style="padding:4px 16px">${dd.done.map((it, i) => `<div class="li"><span class="chk done"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}${it.recurring ? " 🔁" : ""}</span><button onclick="itemUndone(${i})" title="Вернуть в работу" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-rotate-clockwise"></i></button></div>`).join("")}</div>
+      <div class="lbl" style="padding:4px 4px 0">↩ вернуть в работу — снять отметку и снова редактировать</div>` : ""}`;
   },
 
   async tasks() {
@@ -289,6 +291,11 @@ function openCreate(pre) {
         <input type="time" id="ctime" value="${pre.start || '10:00'}" style="width:108px">
         <input type="time" id="cend" value="${pre.end || ''}" style="width:108px">
       </div>
+      <div id="crepeat-wrap" style="margin-top:10px;display:none">
+        <div class="lbl" style="margin-bottom:4px">🔁 Повтор (необязательно)</div>
+        <input id="crepeat" placeholder="напр.: 2н · 3м · 10д · даты: 2026-07-15, 2026-10-15" value="${(pre.repeat || '').replace(/"/g, '&quot;')}">
+        <div class="lbl" style="margin-top:4px">Пусто = один раз. <b>Nд / Nн / Nм</b> = каждые N дней / недель / месяцев (2н, 3м…). <b>даты:</b> список через запятую.</div>
+      </div>
       <button class="btn red" style="margin-top:14px" onclick="saveCreate()">Сохранить</button>
       <div class="link" style="text-align:center;margin-top:10px;cursor:pointer" onclick="brainFromCreate()">🧠 Разобрать умно (несколько дел сразу)</div>
       <button class="btn ghost" style="margin-top:10px" onclick="closeCreate()">Отмена</button>
@@ -303,7 +310,26 @@ function openCreate(pre) {
 function applyCreateType(t) {
   el("cdate-wrap").style.display = (t === "task" || t === "note") ? "none" : "flex";
   el("cend").style.display = (t === "block") ? "" : "none";
+  const cr = el("crepeat-wrap"); if (cr) cr.style.display = (t === "block") ? "block" : "none";
   const cd = el("cdue-wrap"); if (cd) cd.style.display = (t === "task") ? "block" : "none";
+}
+/* парсинг строки повтора → {every,unit} | {dates:[...]} | null */
+function normDate(x) {
+  x = (x || "").trim(); let m = x.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (m) return x;
+  m = x.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/); if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return "";
+}
+function parseRepeat(s) {
+  s = (s || "").trim().toLowerCase(); if (!s) return null;
+  if (s.startsWith("дат") || s.includes(":")) {
+    const part = s.split(":")[1] || s.replace(/^дат\w*/, "");
+    const ds = part.split(/[,;\s]+/).map(normDate).filter(Boolean);
+    return ds.length ? { dates: ds } : null;
+  }
+  const m = s.match(/^(\d+)\s*([а-яa-z]*)/); if (!m) return null;
+  const n = parseInt(m[1], 10) || 1; const u = (m[2] || "д")[0];
+  const unit = (u === "н" || u === "w") ? "week" : (u === "м" || u === "m") ? "month" : "day";
+  return { every: n, unit };
 }
 function curType() { const b = document.querySelector("#ctype b.on"); return b ? b.dataset.t : "task"; }
 function closeCreate() { el("create").classList.add("hidden"); }
@@ -315,7 +341,7 @@ async function saveCreate() {
   if (t === "task") r = await API.addTask(text, "", "🟡", el("cdue") ? el("cdue").value : "");
   else if (t === "note") r = await API.addNote(text);
   else if (t === "rem") r = await API.addReminder(el("cdate").value, el("ctime").value, text);
-  else r = await API.addBlock(el("cdate").value, el("ctime").value, el("cend").value, text);
+  else { const rep = parseRepeat(el("crepeat") ? el("crepeat").value : ""); r = await API.addBlock(el("cdate").value, el("ctime").value, el("cend").value, text, rep); }
   closeCreate();
   toast(r && r.ok !== false ? "Добавлено ✓" : "Не удалось");
   const a = document.querySelector("#nav button.on"); const s = a ? a.dataset.s : "home";
@@ -366,18 +392,23 @@ function closeTask2(id) { closeCreate(); closeTask(id); }
 function editItem(idx) {
   const it = (window.__dayItems || [])[idx];
   if (!it) return;
+  const rec = it.recurring;
   el("create").innerHTML = `
     <div class="sheet">
-      <h3>Изменить</h3>
+      <h3>Изменить${rec ? " · 🔁 повтор" : ""}</h3>
+      ${rec ? `<div class="lbl" style="margin-bottom:6px">Повтор: ${esc(it.repeat_label || '')}. Изменения времени и текста применятся ко всей серии.</div>` : ""}
       <input id="etext" value="${esc(it.text).replace(/"/g, '&quot;')}" style="margin-bottom:8px">
       <div style="display:flex;gap:8px">
-        <input type="date" id="edate" value="${curDay}" style="flex:1">
+        <input type="date" id="edate" value="${curDay}" style="flex:1"${rec ? " disabled" : ""}>
         <input type="time" id="estart" value="${it.start}" style="width:108px">
         ${it.kind === "block" ? `<input type="time" id="eend" value="${it.end || ''}" style="width:108px">` : ""}
       </div>
       <button class="btn red" style="margin-top:14px" onclick="saveEdit(${idx})">Сохранить</button>
       <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();dayItemDone(${idx})">Выполнено</button>
-      <button class="btn ghost" style="margin-top:8px;color:#c0392b;border-color:#e3b3b3" onclick="deleteItem(${idx})">Удалить</button>
+      ${rec
+      ? `<button class="btn ghost" style="margin-top:8px;color:#c0392b;border-color:#e3b3b3" onclick="deleteItem(${idx},'one')">Убрать только этот день</button>
+         <button class="btn ghost" style="margin-top:8px;color:#c0392b;border-color:#e3b3b3" onclick="deleteItem(${idx},'series')">Удалить всю серию</button>`
+      : `<button class="btn ghost" style="margin-top:8px;color:#c0392b;border-color:#e3b3b3" onclick="deleteItem(${idx})">Удалить</button>`}
       <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
     </div>`;
   el("create").classList.remove("hidden");
@@ -385,23 +416,29 @@ function editItem(idx) {
 async function saveEdit(idx) {
   const it = (window.__dayItems || [])[idx]; if (!it) return;
   const newText = ((el("etext") && el("etext").value) || it.text).trim() || it.text;
-  const nd = el("edate").value, ns = el("estart").value;
+  const ns = el("estart").value;
   const ne = (it.kind === "block" && el("eend")) ? el("eend").value : "";
   toast("Сохраняю…");
   let r;
-  if (newText !== it.text) {                       // текст изменился → пересоздать
-    await API.itemDelete({ kind: it.kind, date: curDay, start: it.start, text: it.text });
-    r = it.kind === "block" ? await API.addBlock(nd, ns, ne, newText) : await API.addReminder(nd, ns, newText);
+  if (it.recurring) {                              // повтор → правим серию на месте
+    r = await API.itemEdit({ kind: it.kind, date: curDay, start: it.start, text: it.text,
+      new_text: newText, new_start: ns, new_end: ne });
   } else {
-    r = await API.itemMove({ kind: it.kind, date: curDay, start: it.start, text: it.text,
-      new_date: nd, new_start: ns, new_end: ne });
+    const nd = el("edate").value;
+    if (newText !== it.text) {                     // текст изменился → пересоздать
+      await API.itemDelete({ kind: it.kind, date: curDay, start: it.start, text: it.text });
+      r = it.kind === "block" ? await API.addBlock(nd, ns, ne, newText) : await API.addReminder(nd, ns, newText);
+    } else {
+      r = await API.itemMove({ kind: it.kind, date: curDay, start: it.start, text: it.text,
+        new_date: nd, new_start: ns, new_end: ne });
+    }
   }
   closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.day();
 }
-async function deleteItem(idx) {
+async function deleteItem(idx, scope) {
   const it = (window.__dayItems || [])[idx]; if (!it) return;
   toast("Удаляю…");
-  const r = await API.itemDelete({ kind: it.kind, date: curDay, start: it.start, text: it.text });
+  const r = await API.itemDelete({ kind: it.kind, date: curDay, start: it.start, text: it.text, scope: scope || "one" });
   closeCreate(); toast(r && r.ok !== false ? "Удалено ✓" : "Не удалось"); RENDER.day();
 }
 
@@ -448,6 +485,12 @@ async function dayItemDone(i) {
   toast("Отмечаю…");
   const r = await API.itemDone({ kind: it.kind, date: curDay, start: it.start, text: it.text });
   toast(r && r.ok !== false ? "Выполнено ✓" : "Не удалось"); RENDER.day();
+}
+async function itemUndone(i) {
+  const it = (window.__dayDone || [])[i]; if (!it) return;
+  toast("Возвращаю…");
+  const r = await API.itemUndone({ kind: it.kind, date: curDay, start: it.start, text: it.text });
+  toast(r && r.ok !== false ? "Возвращено в работу ✓" : "Не удалось"); RENDER.day();
 }
 
 /* ---- дедлайны (редактирование) ---- */

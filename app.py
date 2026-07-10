@@ -106,6 +106,40 @@ def load_json(path, default):
         return default
 
 
+def gh_stat_read(path):
+    """(text, status): 200 — файл есть; 404 — файла нет; иначе (5xx/сеть/лимит) — чтение не удалось."""
+    if not (GH_TOKEN and GH_REPO):
+        return None, 0
+    try:
+        r = requests.get(f"https://api.github.com/repos/{GH_REPO}/contents/{path}?ref={GH_BRANCH}",
+                         headers={"Authorization": f"token {GH_TOKEN}"}, timeout=20)
+        if r.status_code == 200:
+            return base64.b64decode(r.json()["content"]).decode("utf-8"), 200
+        return None, r.status_code
+    except Exception:
+        return None, -1
+
+
+def load_store_safe(path):
+    """Безопасное чтение JSON-словаря перед перезаписью (read-modify-write).
+       Возвращает (store, safe). safe=False — чтение сорвалось, писать НЕЛЬЗЯ
+       (иначе затрём уже занесённые данные пустым словарём)."""
+    if not (GH_TOKEN and GH_REPO):
+        return {}, True                  # хранилище отключено — прежнее поведение
+    for _ in range(3):
+        txt, st = gh_stat_read(path)
+        if st == 200:
+            try:
+                data = json.loads(txt)
+                return (data if isinstance(data, dict) else {}), True
+            except Exception:
+                return {}, True          # файл есть, но битый JSON — не блокируем занос
+        if st == 404:
+            return {}, True              # файла ещё нет (новый месяц) — создавать можно
+        _time.sleep(1.5)                 # 5xx / сеть / лимит API — подождать и повторить
+    return {}, False                     # прочитать так и не смогли — запись запрещаем
+
+
 def gh_write(path, content, message):
     """Записать файл в репозиторий бота (PUT contents с актуальным sha)."""
     if not (GH_TOKEN and GH_REPO):
@@ -1408,7 +1442,9 @@ def finance_ingest(b: FinIngest):
     except Exception:
         return {"ok": False, "error": "Дата нужна в формате YYYY-MM-DD"}
     ym = d.strftime("%Y-%m")
-    store = load_json(_agg_path(ym), {})
+    store, safe = load_store_safe(_agg_path(ym))
+    if not safe:
+        return {"ok": False, "error": "Не удалось прочитать текущий свод из хранилища — занос отменён, чтобы не потерять уже внесённые дни. Повторите позже."}
     clean = []
     for r in (b.rows or []):
         try:
@@ -1592,7 +1628,9 @@ def _agg_email_pull():
         return {"ok": False, "error": "файл разобран, но данных не найдено"}
     d = meta.get("date") or dt.date.today().isoformat()
     ym = d[:7]
-    store = load_json(_agg_path(ym), {})
+    store, safe = load_store_safe(_agg_path(ym))
+    if not safe:
+        return {"ok": False, "error": "Чтение месячного свода не удалось — занос отменён во избежание потери данных. Следующая попытка — в очередной запуск агента."}
     store[d] = {"rows": rows, "source": "email:" + meta.get("from", ""),
                 "ts": dt.datetime.now().isoformat(timespec="minutes")}
     ok = gh_write(_agg_path(ym), json.dumps(store, ensure_ascii=False, indent=2), f"agg email {d}")

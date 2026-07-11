@@ -1038,7 +1038,7 @@ RENDER.health = function () {
     return `<div class="li"><div class="t"><div style="font-weight:600">${esc(r.marker)} — ${r.value} ${esc(r.unit || "")}</div><div class="m">${hsFmtD(r.date)} · ${esc(r.testType || "—")} · ${esc(hsRefText(r))}</div></div><span class="badge" style="color:${col};border-color:${col}">${s}</span></div>`;
   }).join("")}</div>` : `<div class="lbl" style="padding:6px 2px 4px">Результатов пока нет — добавьте первый показатель.</div>`;
 
-  const fileList = H.files.length ? `<div class="card" style="padding:6px 16px">${H.files.slice().reverse().map((f) => `<div class="li"><i class="ti ti-file-text" style="color:var(--red)"></i><div class="t"><div style="font-weight:500">${esc(f.name)}</div><div class="m">${hsFmtD(f.date)} · файл добавлен, автоматический разбор будет подключён позже</div></div></div>`).join("")}</div>` : "";
+  const fileList = H.files.length ? `<div class="card" style="padding:6px 16px">${H.files.slice().reverse().map((f) => `<div class="li"><i class="ti ti-file-text" style="color:var(--red)"></i><div class="t" style="cursor:pointer" onclick="hsOpenFile('${f.id}')"><div style="font-weight:500">${esc(f.name)}</div><div class="m">${hsFmtD(f.date)} · нажми, чтобы открыть</div></div><button onclick="hsOpenFile('${f.id}')" title="Открыть" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-eye"></i></button><button onclick="hsDeleteFile('${f.id}')" title="Удалить" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:#c0392b;cursor:pointer;margin-left:4px"><i class="ti ti-trash"></i></button></div>`).join("")}</div>` : "";
 
   const dyn = HS_MARKERS.map((m) => {
     const rows = hsLatest(m);
@@ -1068,11 +1068,12 @@ RENDER.health = function () {
     ${remCards}
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Результаты анализов</div><button onclick="hsAddResult()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ показатель</button></div>
     ${resList}
-    <input type="file" id="hs_pdf" accept="application/pdf,image/*" style="display:none" onchange="hsUploadPdf(this)">
-    <button class="btn ghost" style="margin-top:8px" onclick="el('hs_pdf').click()"><i class="ti ti-upload"></i> Загрузить PDF</button>
+    <button class="btn red" style="margin-top:10px" onclick="hsScanResults()"><i class="ti ti-camera" style="margin-right:6px"></i>Фото/скан анализов — ИИ распознает</button>
+    <div class="lbl" style="padding:4px 2px 0">Сфотографируй бланк или загрузи PDF — ИИ вытащит показатели, ты проверишь и сохранишь. Сам файл сохранится на сервере.</div>
     ${fileList}
     <div class="sec-title" style="margin-top:16px">Динамика показателей</div>
     <div class="card" style="padding:6px 16px">${dyn}</div>
+    <button class="btn red" style="margin-top:16px" onclick="hsAdvice()"><i class="ti ti-sparkles" style="margin-right:6px"></i>Рекомендации ИИ (образ жизни, вопросы врачу, пересдача)</button>
     <div class="sec-title" style="margin-top:16px">Что требует внимания</div>
     ${analytics}
     <div class="lbl" style="padding:12px 2px 22px">Это не диагностика. Раздел помогает планировать чекапы и обсуждать показатели со специалистом. Отклонение от диапазона — повод обсудить с врачом, а не диагноз.</div>`;
@@ -1147,10 +1148,121 @@ function hsSaveResult() {
   H.results.push({ id: hsUID("health-result"), date: el("hx_date").value, testType: el("hx_test").value.trim(), marker, value: Number(value), unit: el("hx_unit").value.trim(), refMin: el("hx_min").value === "" ? "" : Number(el("hx_min").value), refMax: el("hx_max").value === "" ? "" : Number(el("hx_max").value), comment: el("hx_c").value.trim(), source: "manual" });
   hsSave(H); closeCreate(); toast("Показатель добавлен ✓"); RENDER.health();
 }
-function hsUploadPdf(input) {
-  const f = input.files && input.files[0]; if (!f) return;
-  const H = hsLoad(); H.files.push({ id: hsUID("health-file"), date: new Date().toISOString().slice(0, 10), name: f.name, type: "pdf", status: "uploaded" });
-  hsSave(H); toast("Файл добавлен, автоматический разбор будет подключён позже"); RENDER.health();
+/* ---- Здоровье: фото/скан анализов → ИИ распознаёт → подтверждение → сохранение ---- */
+function _downscaleFile(file, maxSide, q) {
+  return new Promise((res) => {
+    const r = new FileReader();
+    if (!/^image\//.test(file.type || "")) { r.onloadend = () => res(r.result); r.readAsDataURL(file); return; }
+    r.onloadend = () => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height; const m = Math.max(w, h);
+        if (m > maxSide) { const k = maxSide / m; w = Math.round(w * k); h = Math.round(h * k); }
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        try { res(c.toDataURL("image/jpeg", q || 0.82)); } catch (e) { res(r.result); }
+      };
+      img.onerror = () => res(r.result); img.src = r.result;
+    };
+    r.readAsDataURL(file);
+  });
+}
+function hsScanResults() {
+  _pickFile(async (f) => {
+    el("create").innerHTML = `<div class="sheet"><h3>Распознаю анализы…</h3><div class="lbl">ИИ читает бланк — пара секунд.</div></div>`;
+    el("create").classList.remove("hidden");
+    const isImg = /^image\//.test(f.type || "");
+    const b64 = await _downscaleFile(f, 1800, 0.82);
+    const mime = isImg ? "image/jpeg" : (f.type || "application/pdf");
+    const fname = f.name || ("Анализ " + new Date().toLocaleDateString("ru"));
+    let fileMeta = null;
+    try { const up = await API.healthFilePut(fname, mime, b64); if (up && up.ok) fileMeta = { id: up.id, name: up.name, date: up.date, mime: up.mime }; } catch (e) {}
+    const r = await API.vision(b64, mime, "labs");
+    if (!(r && r.ok && r.text)) {
+      closeCreate();
+      if (fileMeta) { const H = hsLoad(); H.files.push(fileMeta); hsSave(H); RENDER.health(); }
+      toast("Не удалось распознать" + (r && r.error ? ": " + r.error : "") + (fileMeta ? " (файл сохранён)" : ""));
+      return;
+    }
+    let p; try { p = JSON.parse(r.text.replace(/```json|```/g, "").trim()); } catch (e) {
+      closeCreate(); if (fileMeta) { const H = hsLoad(); H.files.push(fileMeta); hsSave(H); }
+      openDocText(r.text); toast("Структурно не разобралось — вот текст, файл сохранён"); return;
+    }
+    window.__hsExtract = { date: p.date || new Date().toISOString().slice(0, 10), tests: (p.tests || []), file: fileMeta };
+    hsConfirmExtract();
+  });
+}
+function hsConfirmExtract() {
+  const E = window.__hsExtract || { tests: [] };
+  const rows = (E.tests || []).map((t, i) => `
+    <div class="card" style="padding:8px 12px;margin-bottom:6px">
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><input type="checkbox" id="he_ck${i}" checked> <b>${esc(String(t.marker || "показатель"))}</b></label>
+      <div style="display:flex;gap:6px">
+        <input id="he_m${i}" value="${esc(String(t.marker || "")).replace(/"/g, "&quot;")}" placeholder="показатель" style="flex:2">
+        <input id="he_v${i}" type="number" step="any" value="${t.value != null ? t.value : ""}" placeholder="знач." style="flex:1">
+        <input id="he_u${i}" value="${esc(String(t.unit || ""))}" placeholder="ед." style="width:72px">
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="he_lo${i}" type="number" step="any" value="${t.ref_min != null ? t.ref_min : ""}" placeholder="норма от" style="flex:1">
+        <input id="he_hi${i}" type="number" step="any" value="${t.ref_max != null ? t.ref_max : ""}" placeholder="норма до" style="flex:1">
+      </div>
+    </div>`).join("");
+  el("create").innerHTML = `<div class="sheet" style="max-height:82vh;overflow:auto"><h3>Проверь распознанное</h3>
+    <div class="lbl" style="margin-bottom:4px">Дата исследования</div>
+    <input type="date" id="he_date" value="${E.date || new Date().toISOString().slice(0, 10)}" style="width:100%;margin-bottom:10px">
+    ${rows || '<div class="lbl">ИИ не нашёл показателей на бланке. Можно закрыть и ввести вручную «＋ показатель».</div>'}
+    <button class="btn red" style="margin-top:12px" onclick="hsSaveExtract(${(E.tests || []).length})">Сохранить выбранные</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsSaveExtract(n) {
+  const E = window.__hsExtract || {}; const H = hsLoad(); const date = el("he_date").value; let added = 0;
+  for (let i = 0; i < n; i++) {
+    const ck = el("he_ck" + i); if (!ck || !ck.checked) continue;
+    const marker = (el("he_m" + i).value || "").trim(); const val = el("he_v" + i).value;
+    if (!marker || val === "") continue;
+    H.results.push({ id: hsUID("health-result"), date, testType: "", marker, value: Number(val),
+      unit: (el("he_u" + i).value || "").trim(),
+      refMin: el("he_lo" + i).value === "" ? "" : Number(el("he_lo" + i).value),
+      refMax: el("he_hi" + i).value === "" ? "" : Number(el("he_hi" + i).value),
+      comment: "", source: "photo", fileId: (E.file && E.file.id) || "" });
+    added++;
+  }
+  if (E.file && !(H.files || []).some((f) => f.id === E.file.id)) H.files.push(E.file);
+  hsSave(H); closeCreate(); toast(added ? ("Добавлено показателей: " + added) : "Ничего не выбрано"); RENDER.health();
+}
+async function hsOpenFile(id) {
+  toast("Открываю…");
+  const r = await API.healthFileGet(id);
+  if (!(r && r.ok && r.data)) { toast("Файл недоступен"); return; }
+  const w = window.open("", "_blank");
+  if (!w) { toast("Разреши всплывающие окна"); return; }
+  if (/^image\//.test(r.mime || "")) w.document.write(`<title>${esc(r.name || "")}</title><img src="${r.data}" style="max-width:100%">`);
+  else w.document.write(`<title>${esc(r.name || "")}</title><iframe src="${r.data}" style="border:0;width:100%;height:100vh"></iframe>`);
+}
+async function hsDeleteFile(id) {
+  const H = hsLoad(); H.files = (H.files || []).filter((f) => f.id !== id); hsSave(H); RENDER.health();
+  try { await API.healthFileDelete(id); } catch (e) {}
+  toast("Файл удалён");
+}
+async function hsAdvice() {
+  const H = hsLoad(); const lines = [];
+  HS_MARKERS.forEach((m) => { const rows = hsLatest(m); if (rows.length) lines.push(`${m}: ${rows[0].value} ${rows[0].unit || ""} (${hsStatus(rows[0])}${rows.length >= 2 ? ", прошлое " + rows[1].value : ""})`); });
+  H.results.slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 20).forEach((r) => { if (!HS_MARKERS.includes(r.marker)) lines.push(`${r.marker}: ${r.value} ${r.unit || ""} (${hsStatus(r)}) от ${r.date}`); });
+  hsActive().forEach((r) => { const dl = daysLeft(r.nextDate); lines.push(`Чекап «${r.title}»: ${dl < 0 ? "просрочен " + (-dl) + "д" : "через " + dl + "д"}`); });
+  const summary = lines.join("\n") || "Данных пока мало.";
+  el("create").innerHTML = `<div class="sheet"><h3>ИИ анализирует…</h3><div class="lbl">Готовлю рекомендации — пара секунд.</div></div>`;
+  el("create").classList.remove("hidden");
+  const r = await API.healthAdvice(summary);
+  if (!(r && r.ok !== false)) { closeCreate(); toast("Не вышло" + (r && r.error ? ": " + r.error : "")); return; }
+  const sect = (title, arr, icon) => (arr && arr.length) ? `<div class="sec-title" style="margin-top:12px">${icon} ${esc(title)}</div><div class="card" style="padding:6px 16px">${arr.map((x) => `<div class="li"><div class="t">${esc(String(x))}</div></div>`).join("")}</div>` : "";
+  el("create").innerHTML = `<div class="sheet" style="max-height:82vh;overflow:auto"><h3>Рекомендации ИИ</h3>
+    ${r.overview ? `<div class="card"><div class="t">${esc(String(r.overview))}</div></div>` : ""}
+    ${sect("Образ жизни", r.lifestyle, "🌿")}
+    ${sect("Что уточнить у врача", r.ask_doctor, "🩺")}
+    ${sect("Когда пересдать", r.retest, "🔁")}
+    <div class="lbl" style="padding:10px 2px 4px">Это не диагноз и не назначение лечения. Обсуди с врачом.</div>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Закрыть</button></div>`;
 }
 
 /* ---- массовый импорт графика чекапов ---- */

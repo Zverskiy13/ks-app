@@ -140,6 +140,27 @@ def load_store_safe(path):
     return {}, False                     # прочитать так и не смогли — запись запрещаем
 
 
+def gh_delete(path, message):
+    """Удалить файл из репозитория-хранилища."""
+    if not (GH_TOKEN and GH_REPO):
+        return False
+    url = f"https://api.github.com/repos/{GH_REPO}/contents/{path}"
+    h = {"Authorization": f"token {GH_TOKEN}", "Accept": "application/vnd.github+json"}
+    try:
+        r = requests.get(f"{url}?ref={GH_BRANCH}", headers=h, timeout=15)
+        if r.status_code != 200:
+            return True  # файла и так нет
+        sha = r.json().get("sha")
+        pr = requests.delete(url, headers=h,
+                             json={"message": message, "branch": GH_BRANCH, "sha": sha}, timeout=20)
+        ok = pr.status_code in (200, 201)
+        if ok:
+            _GH_CACHE.pop(path, None)
+        return ok
+    except Exception:
+        return False
+
+
 def gh_write(path, content, message):
     """Записать файл в репозиторий бота (PUT contents с актуальным sha)."""
     if not (GH_TOKEN and GH_REPO):
@@ -1319,6 +1340,13 @@ def vision(b: Vision):
                   '{"period":"YYYY-MM или пусто","rows":[{"name":"направление","profit":число_рублей_без_пробелов}]}. '
                   "profit — чистая прибыль за месяц (если есть только выручка и расходы — посчитай прибыль). "
                   "Названия направлений бери как в отчёте.")
+    elif b.mode == "labs":
+        prompt = ("На фото/в PDF — результаты медицинских анализов. Верни СТРОГО JSON без пояснений и markdown: "
+                  '{"date":"YYYY-MM-DD или пусто","tests":[{"marker":"название показателя","value":число,'
+                  '"unit":"единицы","ref_min":число_или_null,"ref_max":число_или_null}]}. '
+                  "Показатели бери как в бланке (можно по-русски). value — только число (десятичный разделитель — точка). "
+                  "Если референс указан диапазоном «a–b» — раздели на ref_min и ref_max; если только одна граница — вторую поставь null. "
+                  "Дату исследования возьми из бланка. НЕ придумывай значения, которых нет в документе.")
     else:
         prompt = ("Извлеки суть документа кратко на русском: что это, ключевые суммы, даты, стороны, главное. "
                   "Без воды, до 8 строк.")
@@ -1336,6 +1364,82 @@ def vision(b: Vision):
             txt = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
             return {"ok": True, "text": txt.strip()}
         return {"ok": False, "error": f"claude {r.status_code}: {r.text[:160]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:160]}
+
+
+# ---------- Здоровье: файлы (гибрид) + ИИ-рекомендации ----------
+class HFile(BaseModel):
+    name: str
+    mime: str = "application/octet-stream"
+    data_b64: str          # можно с префиксом data:...;base64,
+
+
+class HFileId(BaseModel):
+    id: str
+
+
+def _hfile_path(fid):
+    return f"state/health/files/{fid}.json"
+
+
+@app.post("/api/health/file")
+def health_file_put(b: HFile):
+    fid = dt.datetime.now().strftime("%Y%m%d%H%M%S") + "-" + str(_time.time_ns() % 100000)
+    rec = {"id": fid, "name": b.name, "mime": b.mime,
+           "date": dt.date.today().isoformat(), "data": b.data_b64}
+    ok = gh_write(_hfile_path(fid), json.dumps(rec, ensure_ascii=False), f"health: файл {b.name[:40]}")
+    return {"ok": ok, "id": fid, "name": b.name, "mime": b.mime, "date": rec["date"]}
+
+
+@app.get("/api/health/file")
+def health_file_get(id: str = ""):
+    rec = load_json(_hfile_path(id), None)
+    if not rec:
+        return {"ok": False, "error": "файл не найден"}
+    return {"ok": True, "name": rec.get("name"), "mime": rec.get("mime"),
+            "date": rec.get("date"), "data": rec.get("data")}
+
+
+@app.post("/api/health/file/delete")
+def health_file_delete(b: HFileId):
+    if not b.id:
+        return {"ok": False}
+    return {"ok": gh_delete(_hfile_path(b.id), "health: удалён файл")}
+
+
+class HAdvice(BaseModel):
+    summary: str = ""
+
+
+@app.post("/api/health/advice")
+def health_advice(b: HAdvice):
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    sys = ("Ты — заботливый помощник по здоровью и образу жизни. НЕ ставь диагнозы, НЕ назначай "
+           "лечение или препараты. Опирайся на общие принципы профилактики и ЗОЖ. Тон спокойный и "
+           "поддерживающий, без запугивания. Любое отклонение — повод обсудить с врачом, а не диагноз. "
+           "Верни СТРОГО JSON без markdown: "
+           '{"overview":"1-2 фразы общего вывода","lifestyle":["совет по образу жизни/питанию/режиму", ...],'
+           '"ask_doctor":["что стоит уточнить у врача", ...],"retest":["что и примерно когда имеет смысл пересдать", ...]}. '
+           "По-русски, коротко и конкретно, 3-6 пунктов в каждом списке. Если данных мало — скажи это в overview.")
+    body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1200,
+            "system": sys,
+            "messages": [{"role": "user", "content": "Показатели и чекапы человека:\n" + (b.summary or "нет данных")}]}
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages",
+                          headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                          json=body, timeout=120)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"claude {r.status_code}: {r.text[:160]}"}
+        txt = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+        try:
+            data = json.loads(txt.replace("```json", "").replace("```", "").strip())
+        except Exception:
+            data = {"overview": txt.strip(), "lifestyle": [], "ask_doctor": [], "retest": []}
+        data["ok"] = True
+        return data
     except Exception as e:
         return {"ok": False, "error": str(e)[:160]}
 

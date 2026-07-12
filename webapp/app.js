@@ -270,7 +270,7 @@ async function closeTask(id) {
   const t = (window.__tasks || []).find((x) => x.id === id);
   if (!t) return;
   toast("Закрываю…");
-  const r = await API.taskDone(t.text);
+  const r = await API.taskDone(t.id, t.text);
   toast(r && r.ok !== false ? "Закрыто ✓" : "Не удалось закрыть");
   RENDER.tasks();
 }
@@ -398,7 +398,7 @@ async function saveTaskEdit(id) {
   const nw = (el("etext").value || "").trim(); if (!nw) { toast("Текст пустой"); return; }
   const due = el("edue") ? el("edue").value : undefined;
   toast("Сохраняю…");
-  const r = await API.taskEdit(t.text, nw, due);
+  const r = await API.taskEdit(t.id, t.text, nw, due);
   closeCreate(); toast(r && r.ok !== false ? "Изменено ✓" : "Не удалось"); RENDER.tasks();
 }
 function closeTask2(id) { closeCreate(); closeTask(id); }

@@ -1,7 +1,7 @@
 /* Сервис-воркер «Клиники Столицы».
    Код приложения (html/js/css) — network-first: всегда свежий при интернете,
    кэш только как офлайн-резерв. Иконки — cache-first. API — сеть. */
-const CACHE = "ks-app-v42";
+const CACHE = "ks-app-v43";
 const ASSETS = [
   "./index.html", "./styles.css", "./app.js", "./api.js", "./manifest.webmanifest",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"

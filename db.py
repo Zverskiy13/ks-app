@@ -5,7 +5,7 @@
 Если DATABASE_URL не задан или psycopg не установлен — модуль «спит», приложение
 продолжает работать на GitHub. Никакого влияния на текущее поведение.
 """
-import os
+import os, secrets
 
 try:
     import psycopg
@@ -62,6 +62,62 @@ def init_schema():
         with c.cursor() as cur:
             cur.execute(ddl)          # psycopg3: несколько statements в одном execute без параметров — ок
         c.commit()
+
+
+# ---------- Домен «Задачи» (Фаза 1) ----------
+def sync_users(users):
+    """Апсертит пользователей (для FK tasks.user_id)."""
+    for u in users:
+        execute("INSERT INTO users(id,name,role,title) VALUES(%s,%s,%s,%s) "
+                "ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, role=EXCLUDED.role, title=EXCLUDED.title",
+                (u["id"], u.get("name", ""), u.get("role", "staff"), u.get("title", "")))
+
+
+def tasks_count():
+    r = query_one("SELECT count(*) AS n FROM tasks")
+    return r["n"] if r else 0
+
+
+def tasks_list():
+    return query("SELECT id, uid, user_id, company, title, priority, "
+                 "to_char(due,'YYYY-MM-DD') AS due, status "
+                 "FROM tasks ORDER BY (status='done'), due NULLS LAST, id DESC")
+
+
+def task_add(text, company, priority, due, user_id=None):
+    uid = secrets.token_hex(8)
+    execute("INSERT INTO tasks(uid,user_id,company,title,priority,due,status) "
+            "VALUES(%s,%s,%s,%s,%s,%s,'active')",
+            (uid, user_id, company or "", text, priority or "🟡", (due or None)))
+    return uid
+
+
+def task_done(task_id):
+    execute("UPDATE tasks SET status='done', done_at=now(), updated_at=now() WHERE id=%s", (int(task_id),))
+
+
+def task_reopen(task_id):
+    execute("UPDATE tasks SET status='active', done_at=NULL, updated_at=now() WHERE id=%s", (int(task_id),))
+
+
+def task_edit(task_id, new_text, new_due="__keep__"):
+    if new_due == "__keep__":
+        execute("UPDATE tasks SET title=%s, updated_at=now() WHERE id=%s", (new_text, int(task_id)))
+    else:
+        execute("UPDATE tasks SET title=%s, due=%s, updated_at=now() WHERE id=%s",
+                (new_text, (new_due or None), int(task_id)))
+
+
+def import_tasks(parsed):
+    """Одноразовый импорт из tasks.md (parse_tasks): [{text,company,priority,due,done}]."""
+    added = 0
+    for t in parsed:
+        execute("INSERT INTO tasks(uid,company,title,priority,due,status) VALUES(%s,%s,%s,%s,%s,%s)",
+                (secrets.token_hex(8), (t.get("company") or ""), t.get("text", ""),
+                 (t.get("priority") or "🟡"), (t.get("due") or None),
+                 ("done" if t.get("done") else "active")))
+        added += 1
+    return added
 
 
 def status():

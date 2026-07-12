@@ -46,8 +46,8 @@ const API = {
   pushKey() { return _g("push/key"); },
   notifGet() { return _g("notif/settings"); },
 
-  taskEdit(oldText, newText, due) { return this._post("tasks/edit", { old_text: oldText, new_text: newText, ...(due === undefined ? {} : { due }) }); },
-  taskDone(text) { return this._post("tasks/done", { text }); },
+  taskEdit(id, oldText, newText, due) { return this._post("tasks/edit", { id: id || "", old_text: oldText || "", new_text: newText, ...(due === undefined ? {} : { due }) }); },
+  taskDone(id, text) { return this._post("tasks/done", { id: id || "", text: text || "" }); },
   dealTouch(name) { return this._post("deals/touch", { name }); },
   addTask(text, company, priority, due) { return this._post("tasks/add", { text, company: company || "", priority: priority || "🟡", due: due || "" }); },
   addReminder(date, time, text) { return this._post("reminders/add", { date, time: time || "09:00", text }); },

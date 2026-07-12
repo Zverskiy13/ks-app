@@ -479,20 +479,35 @@ def audit_logins(user=Depends(require_owner), ym: str = ""):
     return {"ok": True, "ym": ym, "logins": (log or [])[-100:][::-1]}
 
 
-# ---------- Postgres (Фаза 0): создание схемы при старте + статус ----------
+# ---------- Postgres: схема при старте + статус + флаг доменов ----------
+def _tasks_db_on():
+    return bool(_db and _db.db_available() and os.environ.get("TASKS_BACKEND", "github") == "db")
+
+
 if _db and _db.db_available():
     try:
         _db.init_schema()
         print("DB: схема инициализирована")
     except Exception as _e:
         print("DB init error:", _e)
+    if _tasks_db_on():
+        try:
+            _db.sync_users(list(USERS_BY_ID.values()))
+            if _db.tasks_count() == 0:
+                parsed = parse_tasks(gh_read("state/tasks.md") or "")
+                n = _db.import_tasks(parsed)
+                print(f"DB: задачи импортированы из tasks.md — {n}")
+        except Exception as _e:
+            print("DB tasks init error:", _e)
 
 
 @app.get("/api/db/status")
 def db_status(user=Depends(require_owner)):
     if not _db:
         return {"connected": False, "reason": "модуль db не загружен"}
-    return _db.status()
+    st = _db.status()
+    st["tasks_backend"] = "db" if _tasks_db_on() else "github"
+    return st
 
 
 @app.post("/api/auth/login")
@@ -604,7 +619,12 @@ def today(user=Depends(current_user)):
 @app.get("/api/tasks")
 def tasks(user=Depends(current_user)):
     profile = _prof(user)
-    items = parse_tasks(gh_read("state/tasks.md") or "")
+    if _tasks_db_on():
+        items = [{"id": str(r["id"]), "text": r["title"], "company": r["company"] or "",
+                  "priority": r["priority"], "due": r["due"] or "", "done": r["status"] == "done",
+                  "assignee": r["user_id"] or ""} for r in _db.tasks_list()]
+    else:
+        items = parse_tasks(gh_read("state/tasks.md") or "")
     if profile["role"] == "owner":
         return items
     if profile["role"] == "head":
@@ -613,12 +633,19 @@ def tasks(user=Depends(current_user)):
 
 
 class Done(BaseModel):
-    text: str
+    id: str = ""
+    text: str = ""
 
 
 @app.post("/api/tasks/done")
 def task_done(b: Done):
-    """Закрыть задачу: убрать из «Активные», добавить в «Выполнено». Пишет в tasks.md."""
+    """Закрыть задачу. В режиме БД — по стабильному ID; на GitHub — по тексту (legacy)."""
+    if _tasks_db_on() and b.id.isdigit():
+        try:
+            _db.task_done(b.id)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:160]}
     md = gh_read("state/tasks.md") or ""
     target = (b.text or "").strip()
     if not target or "## Активные" not in md:
@@ -645,13 +672,23 @@ def task_done(b: Done):
 
 
 class EditTask(BaseModel):
-    old_text: str
+    id: str = ""
+    old_text: str = ""
     new_text: str
     due: str = "__keep__"   # "__keep__" — не трогать срок; "" — убрать; "YYYY-MM-DD" — поставить
 
 
 @app.post("/api/tasks/edit")
 def task_edit(b: EditTask):
+    if _tasks_db_on() and b.id.isdigit():
+        try:
+            nw = (b.new_text or "").strip()
+            if not nw:
+                return {"ok": False}
+            _db.task_edit(b.id, nw, b.due)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:160]}
     md = gh_read("state/tasks.md") or ""
     target = (b.old_text or "").strip()
     new = (b.new_text or "").strip()
@@ -754,6 +791,12 @@ class AddTask(BaseModel):
 
 @app.post("/api/tasks/add")
 def task_add(b: AddTask):
+    if _tasks_db_on():
+        try:
+            _db.task_add(b.text.strip(), b.company, b.priority, b.due, _owner_id())
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:160]}
     md = gh_read("state/tasks.md") or "# Задачи\n\n## Активные\n\n## Выполнено\n"
     today = dt.date.today().isoformat()
     due_tag = f" (до:{b.due})" if b.due else ""
@@ -788,6 +831,8 @@ def _similar(a, b):
 
 @app.post("/api/tasks/dedup")
 def tasks_dedup():
+    if _tasks_db_on():
+        return {"ok": True, "removed": 0}   # в БД дубли не копятся (стабильные ID)
     md = gh_read("state/tasks.md") or ""
     if "## Активные" not in md:
         return {"ok": False, "removed": 0}

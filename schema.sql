@@ -1,6 +1,15 @@
 -- Клиники Столицы — целевая схема PostgreSQL (Фаза 0).
 -- Идемпотентно: CREATE TABLE IF NOT EXISTS. Домены переносятся из GitHub по одному.
 
+-- ---------- Универсальное key-value хранилище (Фаза 3) ----------
+-- Документное хранилище «путь файла → содержимое». Переводит ВЕСЬ GitHub-как-БД
+-- на Postgres: атомарный upsert вместо PUT contents (без гонок, лимитов и потерь).
+CREATE TABLE IF NOT EXISTS kv (
+    path       text PRIMARY KEY,
+    content    text NOT NULL DEFAULT '',
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- ---------- Пользователи и доступ ----------
 CREATE TABLE IF NOT EXISTS roles (
     name        text PRIMARY KEY,

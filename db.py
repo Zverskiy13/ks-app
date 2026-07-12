@@ -132,6 +132,31 @@ def cstate_set(user_id, key, data_json):
             (user_id, key, data_json))
 
 
+# ---------- Универсальное key-value хранилище (Фаза 3: весь GitHub-как-БД) ----------
+# Документное хранилище «путь → содержимое файла». Заменяет запись JSON/MD-файлов
+# в GitHub на атомарный upsert в Postgres. Все домены (сделки, дедлайны, повестка,
+# напоминания, финансы, уведомления, push, аудит, цели, привычки и т.д.) переезжают
+# разом — прикладной код по-прежнему зовёт gh_read/gh_write, а маршрутизация в app.py.
+def kv_get(path):
+    r = query_one("SELECT content FROM kv WHERE path=%s", (path,))
+    return r["content"] if r else None
+
+
+def kv_set(path, content):
+    execute("INSERT INTO kv(path,content,updated_at) VALUES(%s,%s,now()) "
+            "ON CONFLICT (path) DO UPDATE SET content=EXCLUDED.content, updated_at=now()",
+            (path, content))
+
+
+def kv_del(path):
+    execute("DELETE FROM kv WHERE path=%s", (path,))
+
+
+def kv_count():
+    r = query_one("SELECT count(*) AS n FROM kv")
+    return int(r["n"]) if r else 0
+
+
 def status():
     if not db_available():
         return {"connected": False, "reason": "DATABASE_URL не задан или psycopg не установлен"}

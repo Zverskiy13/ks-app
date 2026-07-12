@@ -256,7 +256,20 @@ _GH_CACHE = {}        # path -> (text, ts)
 _GH_TTL = 25          # сек: чтения из памяти, без обращения к GitHub
 
 
-def gh_read(path, fresh=False):
+def _storage_db(path):
+    """True — этот путь хранить в Postgres (флаг STORAGE_BACKEND=db).
+       Данные бота (ПВЛ, state/workload/*) всегда остаются на GitHub: их пишет бот,
+       приложению они нужны «живыми», а не разово перенесёнными."""
+    if not (_db and _db.db_available()):
+        return False
+    if os.environ.get("STORAGE_BACKEND", "github") != "db":
+        return False
+    if path.startswith("state/workload/"):
+        return False
+    return True
+
+
+def _gh_read_github(path, fresh=False):
     now = _time.time()
     if not fresh:
         c = _GH_CACHE.get(path)
@@ -276,6 +289,25 @@ def gh_read(path, fresh=False):
     return None
 
 
+def gh_read(path, fresh=False):
+    if _storage_db(path):
+        try:
+            v = _db.kv_get(path)
+        except Exception:
+            v = None
+        if v is not None:
+            return v
+        # ленивая миграция: в KV пусто — тянем из GitHub и переносим в Postgres
+        gv = _gh_read_github(path, fresh=True)
+        if gv is not None:
+            try:
+                _db.kv_set(path, gv)
+            except Exception:
+                pass
+        return gv
+    return _gh_read_github(path, fresh)
+
+
 def load_json(path, default):
     txt = gh_read(path)
     try:
@@ -286,6 +318,22 @@ def load_json(path, default):
 
 def gh_stat_read(path):
     """(text, status): 200 — файл есть; 404 — файла нет; иначе (5xx/сеть/лимит) — чтение не удалось."""
+    if _storage_db(path):
+        try:
+            v = _db.kv_get(path)
+        except Exception:
+            return None, -1                  # БД недоступна — чтение не удалось, писать нельзя
+        if v is not None:
+            return v, 200
+        # в KV нет — попробуем перенести из GitHub (первый доступ), иначе считаем «файла нет»
+        gv = _gh_read_github(path, fresh=True)
+        if gv is not None:
+            try:
+                _db.kv_set(path, gv)
+            except Exception:
+                pass
+            return gv, 200
+        return None, 404
     if not (GH_TOKEN and GH_REPO):
         return None, 0
     try:
@@ -302,7 +350,7 @@ def load_store_safe(path):
     """Безопасное чтение JSON-словаря перед перезаписью (read-modify-write).
        Возвращает (store, safe). safe=False — чтение сорвалось, писать НЕЛЬЗЯ
        (иначе затрём уже занесённые данные пустым словарём)."""
-    if not (GH_TOKEN and GH_REPO):
+    if not _storage_db(path) and not (GH_TOKEN and GH_REPO):
         return {}, True                  # хранилище отключено — прежнее поведение
     for _ in range(3):
         txt, st = gh_stat_read(path)
@@ -320,6 +368,13 @@ def load_store_safe(path):
 
 def gh_delete(path, message):
     """Удалить файл из репозитория-хранилища."""
+    if _storage_db(path):
+        try:
+            _db.kv_del(path)
+            _GH_CACHE.pop(path, None)
+            return True
+        except Exception:
+            return False
     if not (GH_TOKEN and GH_REPO):
         return False
     url = f"https://api.github.com/repos/{GH_REPO}/contents/{path}"
@@ -341,6 +396,13 @@ def gh_delete(path, message):
 
 def gh_write(path, content, message):
     """Записать файл в репозиторий бота (PUT contents с актуальным sha)."""
+    if _storage_db(path):
+        try:
+            _db.kv_set(path, content)
+            _GH_CACHE[path] = (content, _time.time())
+            return True
+        except Exception:
+            return False
     if not (GH_TOKEN and GH_REPO):
         return False
     url = f"https://api.github.com/repos/{GH_REPO}/contents/{path}"
@@ -499,6 +561,13 @@ if _db and _db.db_available():
                 print(f"DB: задачи импортированы из tasks.md — {n}")
         except Exception as _e:
             print("DB tasks init error:", _e)
+    if os.environ.get("STORAGE_BACKEND", "github") == "db":
+        # Все домены (кроме данных бота state/workload/*) хранятся в Postgres.
+        # Перенос из GitHub — ленивый: каждый файл переносится при первом обращении.
+        try:
+            print(f"DB: хранилище=Postgres KV (перенос ленивый), в KV записей: {_db.kv_count()}")
+        except Exception as _e:
+            print("DB storage init error:", _e)
 
 
 def _cstate_on():
@@ -512,6 +581,11 @@ def db_status(user=Depends(require_owner)):
     st = _db.status()
     st["tasks_backend"] = "db" if _tasks_db_on() else "github"
     st["client_state_backend"] = "db" if _cstate_on() else "local"
+    st["storage_backend"] = "db" if _storage_db("state/_probe") else "github"
+    try:
+        st["kv_count"] = _db.kv_count() if _db.db_available() else 0
+    except Exception:
+        st["kv_count"] = 0
     return st
 
 

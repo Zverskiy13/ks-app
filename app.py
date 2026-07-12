@@ -818,6 +818,108 @@ def push_test():
     return {"ok": True, "sent": sent}
 
 
+# ---------- Центр уведомлений: настройки каналов ----------
+NOTIF_DEFAULTS = {
+    "master":        True,
+    "morning":       {"on": True, "time": "08:00"},
+    "evening":       {"on": True, "time": "21:00"},
+    "deadlines":     {"on": True, "time": "09:00", "days": 3},
+    "tasks_overdue": {"on": True, "time": "09:00"},
+    "agenda_day":    {"on": True, "time": "08:00"},
+    "health":        {"on": True, "time": "10:00", "days": 7},
+    "aggregator":    {"on": True, "time": "12:00"},
+}
+
+
+def notif_settings():
+    s = load_json("state/notif_settings.json", {})
+    out = json.loads(json.dumps(NOTIF_DEFAULTS))
+    if isinstance(s, dict):
+        if "master" in s:
+            out["master"] = bool(s["master"])
+        for k, v in s.items():
+            if k in out and isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k].update(v)
+    return out
+
+
+@app.get("/api/notif/settings")
+def notif_get():
+    return {"ok": True, "settings": notif_settings()}
+
+
+class NotifSet(BaseModel):
+    settings: dict
+
+
+@app.post("/api/notif/settings")
+def notif_save(b: NotifSet):
+    ok = gh_write("state/notif_settings.json", json.dumps(b.settings or {}, ensure_ascii=False, indent=2), "app: настройки уведомлений")
+    return {"ok": ok, "settings": notif_settings()}
+
+
+def _notif_now():
+    return dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
+
+
+def _time_reached(hhmm, now):
+    try:
+        h, m = [int(x) for x in str(hhmm).split(":")]
+    except Exception:
+        h, m = 9, 0
+    return (now.hour, now.minute) >= (h, m)
+
+
+def _notif_once_path(ch, d):
+    return f"state/notif/sent-{ch}-{d}.json"
+
+
+def _notif_should(ch, cfg, now):
+    if not cfg.get("on"):
+        return False
+    if not _time_reached(cfg.get("time", "09:00"), now):
+        return False
+    return load_json(_notif_once_path(ch, now.date().isoformat()), None) is None
+
+
+def _notif_mark(ch, now, info=""):
+    gh_write(_notif_once_path(ch, now.date().isoformat()),
+             json.dumps({"ts": now.isoformat(timespec="minutes"), "info": info}, ensure_ascii=False),
+             f"notif {ch}")
+
+
+def _push_all(title, body, url="/"):
+    n = 0
+    for s in load_json("state/push_subs.json", []):
+        try:
+            send_push(s, {"title": title, "body": (body or "")[:180], "url": url})
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+class HCheckups(BaseModel):
+    items: list = []
+
+
+@app.post("/api/health/checkups")
+def health_checkups_save(b: HCheckups):
+    """Клиент синкает график чекапов (только название + дата) для пуш-напоминаний.
+       Медицинские значения остаются на устройстве."""
+    clean = []
+    for it in (b.items or []):
+        try:
+            t = str(it.get("title") or "").strip()
+            d = str(it.get("nextDate") or "").strip()
+            if t and d:
+                clean.append({"title": t[:60], "nextDate": d})
+        except Exception:
+            continue
+    ok = gh_write("state/health/checkups.json", json.dumps(clean, ensure_ascii=False, indent=2), "health: график чекапов")
+    return {"ok": ok, "count": len(clean)}
+
+
 def _push_morning_loop():
     last = {"d": ""}
     while True:
@@ -2050,8 +2152,10 @@ def _assistant_daily():
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         return
-    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
-    if now.hour < 7:
+    now = _notif_now()
+    st = notif_settings()
+    mcfg = st.get("morning", {})
+    if not _time_reached(mcfg.get("time", "08:00"), now):
         return
     cp = f"state/assistant/digest-{now.date().isoformat()}.json"
     if load_json(cp, None) is not None:
@@ -2060,31 +2164,94 @@ def _assistant_daily():
     dg = _assistant_call(key, "digest", ctx, "")
     if dg.get("ok"):
         gh_write(cp, json.dumps(dg, ensure_ascii=False, indent=2), "assistant: daily digest")
-        if push_ready():
-            for s in load_json("state/push_subs.json", []):
-                try:
-                    send_push(s, {"title": "☀️ Главное на сегодня", "body": (dg.get("summary", "") or "")[:180], "url": "/"})
-                except Exception:
-                    pass
+        if push_ready() and st.get("master") and mcfg.get("on"):
+            _push_all("☀️ Главное на сегодня", dg.get("summary", "") or "", "/")
 
 
 def _evening_push():
-    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
-    if now.hour < 21:
+    st = notif_settings()
+    ecfg = st.get("evening", {})
+    if not (st.get("master") and ecfg.get("on") and push_ready()):
+        return
+    now = _notif_now()
+    if not _time_reached(ecfg.get("time", "21:00"), now):
         return
     mark = f"state/assistant/evening-{now.date().isoformat()}.json"
     if load_json(mark, None) is not None:
         return
+    sent = _push_all("🌙 Отчёт по дню", "Отметься: что сделал и не успел + трекер привычек.", "/")
+    gh_write(mark, json.dumps({"sent": sent, "ts": now.isoformat(timespec="minutes")}, ensure_ascii=False), "evening push")
+
+
+def _task_overdue_list():
+    tdy = dt.date.today().isoformat()
+    return [t for t in tasks(_owner_id()) if not t.get("done") and t.get("due") and str(t["due"]) < tdy]
+
+
+def _agg_last_date():
+    ym = dt.date.today().strftime("%Y-%m")
+    dates = sorted(load_json(_agg_path(ym), {}).keys())
+    if not dates:
+        pm = (dt.date.today().replace(day=1) - dt.timedelta(days=1)).strftime("%Y-%m")
+        dates = sorted(load_json(_agg_path(pm), {}).keys())
+    return dates[-1] if dates else ""
+
+
+def _daily_notifications():
     if not push_ready():
         return
-    sent = 0
-    for s in load_json("state/push_subs.json", []):
-        try:
-            send_push(s, {"title": "🌙 Отчёт по дню", "body": "Отметься: что сделал и не успел + трекер привычек (выпивал/курил).", "url": "/"})
-            sent += 1
-        except Exception:
-            pass
-    gh_write(mark, json.dumps({"sent": sent, "ts": now.isoformat(timespec="minutes")}, ensure_ascii=False), "evening push")
+    st = notif_settings()
+    if not st.get("master"):
+        return
+    now = _notif_now()
+    owner = _owner_id()
+    tdy = dt.date.today()
+
+    ch = "deadlines"; cfg = st.get(ch, {})
+    if _notif_should(ch, cfg, now):
+        days = int(cfg.get("days", 3) or 3)
+        soon = [d for d in deadlines_list(owner) if d.get("days") is not None and d["days"] <= days]
+        if soon:
+            body = "; ".join((d["text"][:40] + " — " + ("сегодня" if d["days"] == 0 else f"через {d['days']}д")) for d in soon[:5])
+            _push_all("⏳ Дедлайны", body, "/")
+        _notif_mark(ch, now)
+
+    ch = "tasks_overdue"; cfg = st.get(ch, {})
+    if _notif_should(ch, cfg, now):
+        od = _task_overdue_list()
+        if od:
+            _push_all("🔴 Просроченные задачи", f"{len(od)}: " + "; ".join((t.get("text", "") or "")[:40] for t in od[:4]), "/")
+        _notif_mark(ch, now)
+
+    ch = "agenda_day"; cfg = st.get(ch, {})
+    if _notif_should(ch, cfg, now):
+        ag = today(owner)["agenda"]
+        if ag:
+            _push_all("🗓 План на день", "; ".join(f"{a['time']} {a['text'][:32]}" for a in ag[:6]), "/")
+        _notif_mark(ch, now)
+
+    ch = "health"; cfg = st.get(ch, {})
+    if _notif_should(ch, cfg, now):
+        days = int(cfg.get("days", 7) or 7)
+        due = []
+        for c in load_json("state/health/checkups.json", []):
+            try:
+                dl = (dt.date.fromisoformat(c["nextDate"]) - tdy).days
+            except Exception:
+                continue
+            if dl <= days:
+                due.append(c["title"] + (" — сегодня" if dl == 0 else (f" — просрочено {-dl}д" if dl < 0 else f" — через {dl}д")))
+        if due:
+            _push_all("🩺 Чек-апы и анализы", "; ".join(due[:5]), "/")
+        _notif_mark(ch, now)
+
+    ch = "aggregator"; cfg = st.get(ch, {})
+    if _notif_should(ch, cfg, now):
+        last = _agg_last_date()
+        yday = (tdy - dt.timedelta(days=1)).isoformat()
+        if last and last < yday:
+            _push_all("📉 Агрегатор", f"Данные за {yday} ещё не пришли (последние — {last}). Проверь отчёт.", "/")
+        _notif_mark(ch, now)
 
 
 def _push_reminders_loop():
@@ -2117,6 +2284,7 @@ def _push_reminders_loop():
                     gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминания отправлены")
             _assistant_daily()
             _evening_push()
+            _daily_notifications()
             _agg_email_daily()
         except Exception as e:
             print(f"push reminders: {e}")

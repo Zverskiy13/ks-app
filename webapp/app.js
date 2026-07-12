@@ -239,6 +239,7 @@ const RENDER = {
       <h1 class="h">Ещё</h1>
       <div class="card" style="padding:6px 16px">
         <div class="li" onclick="enablePush()"><i class="ti ti-bell-ringing" style="font-size:20px;color:var(--red)"></i><div class="t">Уведомления</div><span class="lbl" id="pushState">включить</span></div>
+        <div class="li" onclick="openNotifSettings()"><i class="ti ti-settings" style="font-size:20px;color:var(--red)"></i><div class="t">Настройка уведомлений</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="show('journal')"><i class="ti ti-notebook" style="font-size:20px;color:var(--red)"></i><div class="t">Дневник / заметки</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
         ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
@@ -912,6 +913,55 @@ async function testPush() {
   const r = await API.pushTest();
   toast(r && r.ok ? ("Отправлено: " + (r.sent || 0)) : ("Не вышло" + (r && r.reason ? " — " + r.reason : "")));
 }
+/* ---- центр уведомлений: настройка каналов ---- */
+const NOTIF_CH = [
+  { k: "morning", label: "☀️ Утренний бриф", days: 0 },
+  { k: "evening", label: "🌙 Вечерний отчёт", days: 0 },
+  { k: "deadlines", label: "⏳ Дедлайны", days: "за сколько дней" },
+  { k: "tasks_overdue", label: "🔴 Просроченные задачи", days: 0 },
+  { k: "agenda_day", label: "🗓 План на день", days: 0 },
+  { k: "health", label: "🩺 Чек-апы и анализы", days: "за сколько дней" },
+  { k: "aggregator", label: "📉 Агрегатор не обновился", days: 0 },
+];
+async function openNotifSettings() {
+  el("create").innerHTML = `<div class="sheet"><h3>Уведомления</h3><div class="lbl">Загружаю настройки…</div></div>`;
+  el("create").classList.remove("hidden");
+  const r = await API.notifGet();
+  const st = (r && r.settings) || {};
+  const row = (c) => { const cfg = st[c.k] || {}; return `<div class="card" style="padding:8px 12px;margin-bottom:6px">
+      <label style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b>${c.label}</b>
+        <input type="checkbox" id="nf_on_${c.k}" ${cfg.on !== false ? "checked" : ""}></label>
+      <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+        <span class="lbl">Время</span><input type="time" id="nf_t_${c.k}" value="${cfg.time || "09:00"}" style="width:120px">
+        ${c.days ? `<span class="lbl">${c.days}</span><input type="number" id="nf_d_${c.k}" value="${cfg.days != null ? cfg.days : (c.k === "health" ? 7 : 3)}" style="width:64px">` : ""}
+      </div></div>`; };
+  el("create").innerHTML = `<div class="sheet" style="max-height:85vh;overflow:auto"><h3>Уведомления</h3>
+    <div class="card" style="padding:8px 12px;margin-bottom:8px"><label style="display:flex;align-items:center;justify-content:space-between"><b>Все уведомления</b><input type="checkbox" id="nf_master" ${st.master !== false ? "checked" : ""}></label><div class="lbl" style="margin-top:4px">Главный выключатель. Ниже — по каждому направлению отдельно, со своим временем (МСК).</div></div>
+    ${NOTIF_CH.map(row).join("")}
+    <button class="btn red" style="margin-top:10px" onclick="saveNotifSettings()">Сохранить</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="testPush()">Прислать тестовый пуш</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Закрыть</button>
+    <div class="lbl" style="padding:8px 2px 0">Чтобы пуши приходили: включи «Уведомления» выше в «Ещё», и на сервере должен быть задан ключ VAPID. Здоровье и чек-апы пушатся по датам, которые ты задаёшь в разделе «Здоровье».</div></div>`;
+}
+async function saveNotifSettings() {
+  const st = { master: el("nf_master").checked };
+  NOTIF_CH.forEach((c) => {
+    const o = { on: el("nf_on_" + c.k).checked, time: el("nf_t_" + c.k).value || "09:00" };
+    if (c.days) o.days = Number(el("nf_d_" + c.k).value) || (c.k === "health" ? 7 : 3);
+    st[c.k] = o;
+  });
+  toast("Сохраняю…");
+  const r = await API.notifSave(st);
+  closeCreate(); toast(r && r.ok !== false ? "Настройки сохранены ✓" : "Не удалось");
+}
+/* ---- синк графика чекапов на сервер для пуш-напоминаний (только название+дата) ---- */
+function hsSyncCheckups() {
+  try {
+    const H = hsLoad();
+    const items = (H.reminders || []).filter((r) => r.status === "active" && r.nextDate).map((r) => ({ title: r.title, nextDate: r.nextDate }));
+    API.healthCheckups(items);
+  } catch (e) {}
+}
 let toastT;
 function toast(msg) {
   let t = el("toast");
@@ -997,6 +1047,53 @@ function hsSpark(rowsAsc) {
   const vals = rowsAsc.map((r) => Number(r.value)); const mn = Math.min(...vals), mx = Math.max(...vals), rng = mx - mn || 1;
   return `<div style="display:inline-flex;align-items:flex-end;gap:2px;height:18px">${vals.map((v) => { const h = 4 + Math.round((v - mn) / rng * 14); return `<span style="display:inline-block;width:4px;height:${h}px;background:var(--red);opacity:.55;border-radius:1px"></span>`; }).join("")}</div>`;
 }
+/* ---- полноценный график по показателю (SVG, без внешних библиотек) ---- */
+function _hsChartSVG(rowsAsc, ref) {
+  const W = 320, H = 190, pl = 40, pr = 12, pt = 14, pb = 26;
+  const iw = W - pl - pr, ih = H - pt - pb;
+  const vals = rowsAsc.map((r) => Number(r.value));
+  const times = rowsAsc.map((r) => new Date(r.date + "T00:00:00").getTime());
+  let vmin = Math.min(...vals), vmax = Math.max(...vals);
+  if (ref.mn != null) vmin = Math.min(vmin, ref.mn);
+  if (ref.mx != null) vmax = Math.max(vmax, ref.mx);
+  if (vmin === vmax) { vmin -= 1; vmax += 1; }
+  const padv = (vmax - vmin) * 0.12; vmin -= padv; vmax += padv;
+  const tmin = Math.min(...times), tmax = Math.max(...times);
+  const X = (t) => pl + (tmax === tmin ? iw / 2 : (t - tmin) / (tmax - tmin) * iw);
+  const Y = (v) => pt + ih - (v - vmin) / (vmax - vmin) * ih;
+  let band = "";
+  if (ref.mn != null || ref.mx != null) {
+    const yTop = ref.mx != null ? Y(ref.mx) : pt;
+    const yBot = ref.mn != null ? Y(ref.mn) : pt + ih;
+    band = `<rect x="${pl}" y="${yTop}" width="${iw}" height="${Math.max(0, yBot - yTop)}" fill="#1F9D55" opacity="0.10"/>`;
+    if (ref.mx != null) band += `<line x1="${pl}" y1="${Y(ref.mx)}" x2="${pl + iw}" y2="${Y(ref.mx)}" stroke="#1F9D55" stroke-dasharray="3 3" opacity="0.55"/>`;
+    if (ref.mn != null) band += `<line x1="${pl}" y1="${Y(ref.mn)}" x2="${pl + iw}" y2="${Y(ref.mn)}" stroke="#1F9D55" stroke-dasharray="3 3" opacity="0.55"/>`;
+  }
+  let grid = "";
+  for (let i = 0; i <= 2; i++) { const v = vmin + (vmax - vmin) * i / 2, yy = Y(v); grid += `<line x1="${pl}" y1="${yy}" x2="${pl + iw}" y2="${yy}" stroke="#eee"/><text x="${pl - 6}" y="${yy + 3}" text-anchor="end" font-size="9" fill="#999">${+v.toFixed(2)}</text>`; }
+  const line = rowsAsc.length >= 2 ? `<polyline points="${rowsAsc.map((r, i) => `${X(times[i])},${Y(vals[i])}`).join(" ")}" fill="none" stroke="var(--red)" stroke-width="2"/>` : "";
+  const dots = rowsAsc.map((r, i) => { const st = hsStatus(r); const col = (st === "выше" || st === "ниже") ? "var(--red)" : "#1F9D55"; const last = i === rowsAsc.length - 1; return `<circle cx="${X(times[i])}" cy="${Y(vals[i])}" r="${last ? 4.5 : 3}" fill="${col}" stroke="#fff" stroke-width="1.5"/>`; }).join("");
+  let xl = `<text x="${X(tmin)}" y="${H - 8}" text-anchor="start" font-size="9" fill="#999">${hsFmtD(rowsAsc[0].date)}</text>`;
+  if (rowsAsc.length > 1) xl += `<text x="${X(tmax)}" y="${H - 8}" text-anchor="end" font-size="9" fill="#999">${hsFmtD(rowsAsc[rowsAsc.length - 1].date)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${band}${grid}${line}${dots}${xl}</svg>`;
+}
+function hsOpenChart(marker) {
+  const rowsDesc = hsLatest(marker), rowsAsc = rowsDesc.slice().reverse();
+  if (!rowsAsc.length) { toast("Нет данных по показателю"); return; }
+  const ref = hsRef(rowsAsc[rowsAsc.length - 1]);
+  const last = rowsDesc[0], st = hsStatus(last);
+  const col = (st === "выше" || st === "ниже") ? "var(--red)" : st === "в диапазоне" ? "#1F9D55" : "#9ca3af";
+  const listRows = rowsDesc.slice(0, 14).map((r) => { const s = hsStatus(r); const c = (s === "выше" || s === "ниже") ? "var(--red)" : s === "в диапазоне" ? "#1F9D55" : "#9ca3af"; return `<div class="li"><div class="t"><div style="font-weight:500">${r.value} ${esc(r.unit || "")}</div><div class="m">${hsFmtD(r.date)}${r.testType ? " · " + esc(r.testType) : ""}</div></div><span class="badge" style="color:${c};border-color:${c}">${s}</span></div>`; }).join("");
+  el("create").innerHTML = `<div class="sheet" style="max-height:85vh;overflow:auto">
+    <h3>${esc(marker)}</h3>
+    <div class="row spread"><span class="lbl">${esc(hsRefText(rowsAsc[rowsAsc.length - 1]))}</span><span class="lbl" style="font-weight:700;color:${col}">${last.value} ${esc(last.unit || "")} · ${st}</span></div>
+    <div class="card" style="padding:8px 8px 2px;margin-top:8px">${_hsChartSVG(rowsAsc, ref)}<div class="lbl" style="text-align:center;padding:0 0 2px"><span style="color:#1F9D55">▬</span> зона нормы · <span style="color:var(--red)">●</span> вне нормы</div></div>
+    ${rowsAsc.length < 2 ? '<div class="lbl" style="padding:4px 2px">Пока одно измерение — линия появится после второго.</div>' : ''}
+    <div class="sec-title" style="margin-top:10px">Все измерения (${rowsDesc.length})</div>
+    <div class="card" style="padding:4px 16px">${listRows}</div>
+    <button class="btn ghost" style="margin-top:10px" onclick="closeCreate()">Закрыть</button></div>`;
+  el("create").classList.remove("hidden");
+}
 
 /* ---- карточка на главной ---- */
 function hsHomeCard() {
@@ -1046,7 +1143,7 @@ RENDER.health = function () {
     const last = rows[0], s = hsStatus(last);
     const trend = rows.length >= 2 ? (Number(rows[0].value) > Number(rows[1].value) ? "растёт" : Number(rows[0].value) < Number(rows[1].value) ? "снижается" : "стабильно") : "—";
     const col = (s === "выше" || s === "ниже") ? "var(--red)" : s === "в диапазоне" ? "#1F9D55" : "#9ca3af";
-    return `<div class="li"><div class="t"><div style="font-weight:600">${m}</div><div class="m">${last.value} ${esc(last.unit || "")} · ${hsFmtD(last.date)} · ${trend}</div></div><div style="text-align:right">${hsSpark(rows.slice(0, 6).reverse())}<div class="m" style="color:${col}">${s}</div></div></div>`;
+    return `<div class="li" onclick="hsOpenChart('${m.replace(/'/g, "\\'")}')" style="cursor:pointer"><div class="t"><div style="font-weight:600">${m} <i class="ti ti-chart-line" style="color:#ccc;font-size:13px"></i></div><div class="m">${last.value} ${esc(last.unit || "")} · ${hsFmtD(last.date)} · ${trend}</div></div><div style="text-align:right">${hsSpark(rows.slice(0, 6).reverse())}<div class="m" style="color:${col}">${s}</div></div></div>`;
   }).join("");
 
   const sig = [];
@@ -1072,6 +1169,7 @@ RENDER.health = function () {
     <div class="lbl" style="padding:4px 2px 0">Сфотографируй бланк или загрузи PDF — ИИ вытащит показатели, ты проверишь и сохранишь. Сам файл сохранится на сервере.</div>
     ${fileList}
     <div class="sec-title" style="margin-top:16px">Динамика показателей</div>
+    <div class="lbl" style="padding:0 2px 4px">Нажми на показатель — откроется график с зоной нормы и всеми измерениями.</div>
     <div class="card" style="padding:6px 16px">${dyn}</div>
     <button class="btn red" style="margin-top:16px" onclick="hsAdvice()"><i class="ti ti-sparkles" style="margin-right:6px"></i>Рекомендации ИИ (образ жизни, вопросы врачу, пересдача)</button>
     <div class="sec-title" style="margin-top:16px">Что требует внимания</div>
@@ -1084,9 +1182,9 @@ function hsReminderDone(id) {
   const H = hsLoad(); const r = H.reminders.find((x) => x.id === id); if (!r) return;
   r.status = "done";
   if (Number(r.frequencyDays) > 0) { const nd = new Date(); nd.setDate(nd.getDate() + Number(r.frequencyDays)); H.reminders.push({ id: hsUID("health-reminder"), title: r.title, type: r.type || "lab", frequencyDays: Number(r.frequencyDays), nextDate: nd.toISOString().slice(0, 10), comment: r.comment || "", status: "active" }); }
-  hsSave(H); toast("Выполнено ✓" + (Number(r.frequencyDays) > 0 ? " · запланирован следующий" : "")); RENDER.health();
+  hsSave(H); hsSyncCheckups(); toast("Выполнено ✓" + (Number(r.frequencyDays) > 0 ? " · запланирован следующий" : "")); RENDER.health();
 }
-function hsReminderPostpone(id) { const H = hsLoad(); const r = H.reminders.find((x) => x.id === id); if (!r) return; const d = new Date(r.nextDate + "T00:00:00"); d.setDate(d.getDate() + 14); r.nextDate = d.toISOString().slice(0, 10); r.status = "active"; hsSave(H); toast("Отложено на 2 недели"); RENDER.health(); }
+function hsReminderPostpone(id) { const H = hsLoad(); const r = H.reminders.find((x) => x.id === id); if (!r) return; const d = new Date(r.nextDate + "T00:00:00"); d.setDate(d.getDate() + 14); r.nextDate = d.toISOString().slice(0, 10); r.status = "active"; hsSave(H); hsSyncCheckups(); toast("Отложено на 2 недели"); RENDER.health(); }
 
 /* ---- формы ---- */
 function hsReminderForm(r) {
@@ -1113,9 +1211,9 @@ function hsSaveReminder(id) {
   const title = el("hr_t").value, nextDate = el("hr_d").value, frequencyDays = Number(el("hr_f").value) || 0, comment = el("hr_c").value.trim();
   if (id) { const r = H.reminders.find((x) => x.id === id); if (r) { r.title = title; r.nextDate = nextDate; r.frequencyDays = frequencyDays; r.comment = comment; r.status = "active"; } }
   else H.reminders.push({ id: hsUID("health-reminder"), title, type: "lab", frequencyDays, nextDate, comment, status: "active" });
-  hsSave(H); closeCreate(); toast("Сохранено ✓"); RENDER.health();
+  hsSave(H); hsSyncCheckups(); closeCreate(); toast("Сохранено ✓"); RENDER.health();
 }
-function hsDeleteReminder(id) { const H = hsLoad(); H.reminders = H.reminders.filter((x) => x.id !== id); hsSave(H); closeCreate(); toast("Удалено ✓"); RENDER.health(); }
+function hsDeleteReminder(id) { const H = hsLoad(); H.reminders = H.reminders.filter((x) => x.id !== id); hsSave(H); hsSyncCheckups(); closeCreate(); toast("Удалено ✓"); RENDER.health(); }
 function hsAddResult() {
   const tOpts = HS_TYPES.map((t) => `<option value="${t}">`).join("");
   const mOpts = HS_MARKERS.map((t) => `<option value="${t}">`).join("");
@@ -1302,7 +1400,7 @@ function hsRunImport() {
       frequencyDays: hsParsePeriod(p[1]), nextDate: hsParseDate(p[2]) || today, comment: "", status: "active" });
     added++;
   });
-  hsSave(H); closeCreate(); toast("Добавлено чекапов: " + added); RENDER.health();
+  hsSave(H); hsSyncCheckups(); closeCreate(); toast("Добавлено чекапов: " + added); RENDER.health();
 }
 
 /* ===================== ИИ-ПОМОЩНИК ===================== */

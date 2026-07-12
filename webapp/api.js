@@ -177,6 +177,9 @@ const API = {
   pushKey() { return USE_REMOTE ? fetch(`${API_BASE}/push/key`).then(r => r.json()) : Promise.resolve({ key: "", ready: false }); },
   pushSubscribe(sub) { return this._post("push/subscribe", { subscription: sub }); },
   pushTest() { return this._post("push/test", {}); },
+  notifGet() { return USE_REMOTE ? fetch(`${API_BASE}/notif/settings`).then(r => r.json()) : Promise.resolve({ ok: false }); },
+  notifSave(settings) { return this._post("notif/settings", { settings }); },
+  healthCheckups(items) { return this._post("health/checkups", { items }); },
 
   async deals(profile) {
     if (USE_REMOTE) return this._get("deals", profile);

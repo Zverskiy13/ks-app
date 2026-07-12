@@ -1013,6 +1013,7 @@ function toast(msg) {
 
 el("addBtn").onclick = () => openCreate();
 el("create").onclick = (e) => { if (e.target.id === "create") closeCreate(); };
+{ const _lb = el("logoutBtn"); if (_lb) _lb.onclick = logout; }
 
 buildPad();
 

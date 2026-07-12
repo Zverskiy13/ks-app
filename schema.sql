@@ -254,6 +254,15 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 
+-- ---------- Клиентское состояние (здоровье/трекер): документ-хранилище по пользователю ----------
+CREATE TABLE IF NOT EXISTS client_state (
+    user_id    text NOT NULL,
+    key        text NOT NULL,                       -- 'health' | 'tracker'
+    data       jsonb NOT NULL DEFAULT '{}',
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, key)
+);
+
 -- сиды справочников
 INSERT INTO roles(name, description) VALUES
     ('owner','Владелец'), ('head','Руководитель'), ('staff','Сотрудник')

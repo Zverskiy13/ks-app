@@ -501,13 +501,43 @@ if _db and _db.db_available():
             print("DB tasks init error:", _e)
 
 
+def _cstate_on():
+    return bool(_db and _db.db_available() and os.environ.get("CLIENT_STATE_BACKEND", "local") == "db")
+
+
 @app.get("/api/db/status")
 def db_status(user=Depends(require_owner)):
     if not _db:
         return {"connected": False, "reason": "модуль db не загружен"}
     st = _db.status()
     st["tasks_backend"] = "db" if _tasks_db_on() else "github"
+    st["client_state_backend"] = "db" if _cstate_on() else "local"
     return st
+
+
+class CState(BaseModel):
+    key: str
+    data: dict = {}
+
+
+@app.get("/api/state")
+def state_get(key: str = "", user=Depends(current_user)):
+    """Клиентское состояние (health|tracker). backend=local → клиент работает на localStorage."""
+    if key not in ("health", "tracker"):
+        return {"ok": False, "error": "bad key"}
+    if not _cstate_on():
+        return {"ok": True, "backend": "local", "data": None}
+    return {"ok": True, "backend": "db", "data": _db.cstate_get(_prof(user)["id"], key)}
+
+
+@app.post("/api/state")
+def state_set(b: CState, user=Depends(current_user)):
+    if b.key not in ("health", "tracker"):
+        return {"ok": False, "error": "bad key"}
+    if not _cstate_on():
+        return {"ok": False, "backend": "local"}
+    _db.cstate_set(_prof(user)["id"], b.key, json.dumps(b.data, ensure_ascii=False))
+    return {"ok": True, "backend": "db"}
 
 
 @app.post("/api/auth/login")

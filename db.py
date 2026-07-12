@@ -120,6 +120,18 @@ def import_tasks(parsed):
     return added
 
 
+# ---------- Клиентское состояние (здоровье/трекер) ----------
+def cstate_get(user_id, key):
+    r = query_one("SELECT data FROM client_state WHERE user_id=%s AND key=%s", (user_id, key))
+    return r["data"] if r else None
+
+
+def cstate_set(user_id, key, data_json):
+    execute("INSERT INTO client_state(user_id,key,data,updated_at) VALUES(%s,%s,%s::jsonb,now()) "
+            "ON CONFLICT (user_id,key) DO UPDATE SET data=EXCLUDED.data, updated_at=now()",
+            (user_id, key, data_json))
+
+
 def status():
     if not db_available():
         return {"connected": False, "reason": "DATABASE_URL не задан или psycopg не установлен"}

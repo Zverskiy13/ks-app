@@ -43,6 +43,8 @@ const API = {
   healthFileGet(id) { return _g(`health/file?id=${encodeURIComponent(id)}`); },
   auditLogins(ym) { return _g(`audit/logins?ym=${ym || ""}`); },
   dbStatus() { return _g("db/status"); },
+  stateGet(key) { return _g(`state?key=${encodeURIComponent(key)}`); },
+  stateSet(key, data) { return this._post("state", { key, data }); },
   pushKey() { return _g("push/key"); },
   notifGet() { return _g("notif/settings"); },
 

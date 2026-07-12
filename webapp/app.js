@@ -57,11 +57,35 @@ async function tryLogin() {
 }
 
 /* ---------- app shell ---------- */
-function enterApp() {
+/* Синхронизация здоровья/трекера с сервером (если включён CLIENT_STATE_BACKEND=db).
+   localStorage остаётся рабочим кэшем: тянем с сервера в него при входе, пушим при сохранении. */
+window.HS_REMOTE = false; window.TK_REMOTE = false;
+async function stateSyncIn() {
+  try {
+    const rh = await API.stateGet("health");
+    if (rh && rh.backend === "db") {
+      window.HS_REMOTE = true;
+      if (rh.data && (rh.data.reminders || rh.data.results || rh.data.files)) {
+        try { localStorage.setItem(HS_KEY, JSON.stringify(rh.data)); } catch (e) {}
+      } else { const loc = localStorage.getItem(HS_KEY); if (loc) { try { await API.stateSet("health", JSON.parse(loc)); } catch (e) {} } }
+    }
+  } catch (e) {}
+  try {
+    const rt = await API.stateGet("tracker");
+    if (rt && rt.backend === "db") {
+      window.TK_REMOTE = true;
+      if (rt.data && Object.keys(rt.data).length) {
+        try { localStorage.setItem(TK_KEY, JSON.stringify(rt.data)); } catch (e) {}
+      } else { const loc = localStorage.getItem(TK_KEY); if (loc) { try { await API.stateSet("tracker", JSON.parse(loc)); } catch (e) {} } }
+    }
+  } catch (e) {}
+}
+async function enterApp() {
   el("login").classList.add("hidden");
   el("app").classList.remove("hidden");
   el("roleName").textContent = profile.title.split("·")[0].trim();
   buildNav();
+  await stateSyncIn();
   show(profile.sections[0]);
 }
 function buildNav() {
@@ -1033,7 +1057,7 @@ const HS_REF = {
   "АСТ": { min: 0, max: 40, unit: "Ед/л" },
   "Креатинин": { min: 62, max: 106, unit: "мкмоль/л" }
 };
-function hsSave(d) { try { localStorage.setItem(HS_KEY, JSON.stringify(d)); } catch (e) {} }
+function hsSave(d) { try { localStorage.setItem(HS_KEY, JSON.stringify(d)); } catch (e) {} if (window.HS_REMOTE) { try { API.stateSet("health", d); } catch (e) {} } }
 function hsLoad() {
   try { const r = JSON.parse(localStorage.getItem(HS_KEY)); if (r && r.reminders) return r; } catch (e) {}
   const t = new Date(); const iso = (n) => { const x = new Date(t); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
@@ -1482,7 +1506,7 @@ async function aiAsk() {
 /* ===================== ТРЕКЕР ПРИВЫЧЕК (полезные + вредные + геймификация) ===================== */
 const TK_KEY = "ks_track";
 const TK_BADGES = [3, 7, 14, 30, 60, 90, 180];
-function tkSave(d) { try { localStorage.setItem(TK_KEY, JSON.stringify(d)); } catch (e) {} }
+function tkSave(d) { try { localStorage.setItem(TK_KEY, JSON.stringify(d)); } catch (e) {} if (window.TK_REMOTE) { try { API.stateSet("tracker", d); } catch (e) {} } }
 function tkNorm(d) {
   d.weight = d.weight || { goal: null, start: null, log: {} };
   (d.bad || []).forEach((b) => { if (b.price == null) b.price = 0; if (b.norm == null) b.norm = 0; });

@@ -989,16 +989,8 @@ function toast(msg) {
   t.style.opacity = "1"; clearTimeout(toastT); toastT = setTimeout(() => t.style.opacity = "0", 1600);
 }
 
-/* role switch (demo) */
 el("addBtn").onclick = () => openCreate();
 el("create").onclick = (e) => { if (e.target.id === "create") closeCreate(); };
-el("roleBtn").onclick = () => el("sheet").classList.remove("hidden");
-el("sheet").onclick = (e) => { if (e.target.id === "sheet") el("sheet").classList.add("hidden"); };
-document.querySelectorAll("#sheet .opt").forEach((o) => o.onclick = async () => {
-  el("sheet").classList.add("hidden");
-  const res = await API.login(o.dataset.pin);
-  if (res.ok) { profile = res.profile; enterApp(); }
-});
 
 buildPad();
 

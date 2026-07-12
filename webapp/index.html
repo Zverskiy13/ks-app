@@ -25,7 +25,6 @@
   <div class="hint">Введите PIN для входа</div>
   <div class="dots" id="dots"></div>
   <div class="pad" id="pad"></div>
-  <div class="demo">Демо-вход:&nbsp; 1111 — владелец&nbsp;·&nbsp; 2222 — руководитель&nbsp;·&nbsp; 3333 — сотрудник</div>
 </div>
 
 <div id="app" class="app hidden">
@@ -34,7 +33,7 @@
       <div class="logo">КС</div>
       <div>
         <div class="nm">КЛИНИКИ СТОЛИЦЫ</div>
-        <button class="role" id="roleBtn"><span id="roleName">Владелец</span> <i class="ti ti-chevron-down"></i></button>
+        <button class="role" id="roleBtn"><span id="roleName">Владелец</span></button>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:14px">
@@ -64,15 +63,6 @@
 </div>
 
 <div id="create" class="sheet-bg hidden"></div>
-
-<div id="sheet" class="sheet-bg hidden">
-  <div class="sheet">
-    <h3>Сменить роль (демо)</h3>
-    <div class="opt" data-pin="1111"><i class="ti ti-crown" style="font-size:20px;color:var(--red)"></i><div><div style="font-weight:600;font-size:14px">Владелец</div><div class="lbl">вся группа, финансы, цель</div></div></div>
-    <div class="opt" data-pin="2222"><i class="ti ti-building-hospital" style="font-size:20px;color:var(--red)"></i><div><div style="font-weight:600;font-size:14px">Руководитель · Калмыкия</div><div class="lbl">своя компания</div></div></div>
-    <div class="opt" data-pin="3333"><i class="ti ti-user" style="font-size:20px;color:var(--red)"></i><div><div style="font-weight:600;font-size:14px">Сотрудник · ПВЛ</div><div class="lbl">только свои задачи</div></div></div>
-  </div>
-</div>
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
 <script src="api.js"></script>

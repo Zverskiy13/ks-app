@@ -8,7 +8,10 @@ ENV (Railway → Variables):
   GITHUB_TOKEN   — тот же fine-grained PAT, что у бота (Contents: read)
   GITHUB_REPO    — например Zverskiy13/ks-telegram-bot
   GITHUB_BRANCH  — main
-  APP_PINS       — (опц.) JSON-карта PIN→роль; иначе демо-пины 1111/2222/3333
+  APP_PINS       — ОБЯЗАТЕЛЬНО (или APP_PIN_HASHES): JSON {pin: {id,name,role,companies,title}}.
+                   Без него приложение НЕ стартует — демо-PIN в коде отсутствуют.
+  APP_PIN_HASHES — альтернатива APP_PINS: JSON [{id,...,salt(hex),hash(hex)}] (без plaintext-PIN).
+  SECRET_KEY     — ключ подписи сессии (опц.; иначе стабильно из GITHUB_TOKEN).
 Старт: uvicorn app:app --host 0.0.0.0 --port $PORT   (см. Procfile)
 """
 import os, json, base64, re, threading, time as _time, datetime as dt
@@ -65,12 +68,14 @@ ROLE_SECTIONS = {
     "head":  ["home", "day", "tasks", "journal", "money", "funnel", "more"],
     "staff": ["home", "day", "tasks", "journal", "more"],
 }
-DEFAULT_PINS = {
-    "1111": {"id": "ivan",  "name": "Иван Кузин",         "role": "owner", "companies": "*",          "title": "Владелец"},
-    "2222": {"id": "natav", "name": "Наталья Мартиросян", "role": "head",  "companies": ["Калмыкия"], "title": "Руководитель · Калмыкия"},
-    "3333": {"id": "emp1",  "name": "Администратор ПВЛ",  "role": "staff", "companies": ["ПВЛ"],      "title": "Сотрудник · ПВЛ"},
-}
-PINS = json.loads(os.environ["APP_PINS"]) if os.environ.get("APP_PINS") else DEFAULT_PINS
+# Пользователи и PIN берутся ТОЛЬКО из окружения. Демо-значений в коде нет.
+# APP_PINS       — JSON {pin: {id,name,role,companies,title}} (plaintext-PIN только в env)
+# APP_PIN_HASHES — JSON [{id,name,role,companies,title, salt(hex), hash(hex)}] (без plaintext)
+_APP_PINS_RAW = os.environ.get("APP_PINS")
+_APP_PIN_HASHES_RAW = os.environ.get("APP_PIN_HASHES")
+if not (_APP_PINS_RAW or _APP_PIN_HASHES_RAW):
+    raise RuntimeError("Запуск запрещён: не заданы APP_PINS или APP_PIN_HASHES. "
+                       "В коде нет демо-PIN — задайте пользователей через переменные окружения.")
 
 app = FastAPI(title="Клиники Столицы")
 _ORIGINS = [o.strip() for o in os.environ.get("APP_ORIGIN", "").split(",") if o.strip()]
@@ -100,24 +105,21 @@ def _b64u_dec(s):
 
 
 def _build_pin_table():
-    """Хеши PIN (scrypt). Источник: APP_PIN_HASHES (готовые хеши) либо APP_PINS/дефолт (хешируем при старте)."""
+    """Таблица scrypt-хешей PIN. Источник — ТОЛЬКО окружение (APP_PIN_HASHES или APP_PINS)."""
     table = []
-    raw = os.environ.get("APP_PIN_HASHES")
-    if raw:
-        try:
-            for rec in json.loads(raw):
-                table.append({"salt": bytes.fromhex(rec["salt"]), "hash": bytes.fromhex(rec["hash"]),
-                              "profile": {k: rec[k] for k in ("id", "name", "role", "companies", "title") if k in rec}})
-            return table
-        except Exception:
-            pass
-    for pin, prof in PINS.items():
+    if _APP_PIN_HASHES_RAW:
+        for rec in json.loads(_APP_PIN_HASHES_RAW):
+            table.append({"salt": bytes.fromhex(rec["salt"]), "hash": bytes.fromhex(rec["hash"]),
+                          "profile": {k: rec[k] for k in ("id", "name", "role", "companies", "title") if k in rec}})
+        return table
+    for pin, prof in json.loads(_APP_PINS_RAW).items():
         salt = secrets.token_bytes(16)
         table.append({"salt": salt, "hash": _scrypt(pin, salt), "profile": prof})
     return table
 
 
 PIN_TABLE = _build_pin_table()
+USERS_BY_ID = {rec["profile"]["id"]: rec["profile"] for rec in PIN_TABLE}
 
 
 def verify_pin(pin):
@@ -372,9 +374,9 @@ def _clean_task(s):
 
 
 def by_id(uid):
-    for u in PINS.values():
-        if u["id"] == uid:
-            return {**u, "sections": ROLE_SECTIONS[u["role"]]}
+    u = USERS_BY_ID.get(uid)
+    if u:
+        return {**u, "sections": ROLE_SECTIONS[u["role"]]}
     return {"id": uid, "role": "staff", "companies": [], "sections": ROLE_SECTIONS["staff"]}
 
 

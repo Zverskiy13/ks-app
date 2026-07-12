@@ -632,13 +632,16 @@ RENDER.group = async function () {
       <div style="font-size:17px;font-weight:800">${ymLabel(d.ym)}</div>
       <button class="mbtn" onclick="groupShift(1)"><i class="ti ti-chevron-right"></i></button>
     </div>
-    <div class="card"><div class="lbl">Прибыль группы за месяц</div><div class="big">${nf(d.total)} ₽</div>
-      <div class="lbl">Твой доход (с учётом долей): <b style="color:var(--ink)">${nf(d.owner_income)} ₽</b></div></div>
-    <div class="card" style="padding:6px 16px">${(d.rows || []).map((r) => `<div class="li"><div class="t"><div style="font-weight:700">${esc(r.name)}${r.share && r.share !== 1 ? ` <span class="lbl" style="font-weight:400">· доля ${Math.round(r.share * 100)}%</span>` : ""}</div><div class="m">${r.profit == null ? "нет данных за месяц" : dlt(r.profit, r.prev)}</div></div><div style="font-weight:800">${r.profit == null ? "—" : nf(r.profit)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Направлений нет</div>'}</div>
-    <button class="btn red" onclick="openGroupForm()">Внести / изменить за ${ymLabel(d.ym)}</button>
+    <div class="card"><div class="lbl">Чистая прибыль группы за месяц</div><div class="big">${nf(d.total)} ₽</div>
+      <div class="lbl">Твой доход (с учётом долей): <b style="color:var(--ink)">${nf(d.owner_income)} ₽</b> из цели ${nf(d.goal || 5000000)} · ${d.goal ? Math.min(100, Math.round(d.owner_income / d.goal * 100)) : 0}%</div>
+      <div class="lbl">До цели: <b style="color:var(--red)">${nf(Math.max(0, (d.goal || 5000000) - d.owner_income))} ₽</b></div></div>
+    <div class="card" style="padding:6px 16px">${(d.rows || []).map((r) => `<div class="li"><div class="t"><div style="font-weight:700">${esc(r.name)}${r.share && r.share !== 1 ? ` <span class="lbl" style="font-weight:400">· доля ${Math.round(r.share * 100)}%</span>` : ""}</div><div class="m">${r.net == null ? "нет данных за месяц" : `доход ${nf(r.income)} − расход ${nf(r.expense)} ${dlt(r.net, r.prev_net)}`}</div></div><div style="font-weight:800">${r.net == null ? "—" : nf(r.net)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Направлений нет</div>'}</div>
+    ${d.agg_total ? `<div class="lbl" style="padding:6px 2px">🧾 Маржа агрегатора за месяц (справочно): <b>${nf(d.agg_total)} ₽</b> — валовая, без офиса/ЗП. В форме можно подставить её как доход направления «Агрегатор».</div>` : ""}
+    <button class="btn red" onclick="openGroupForm()">Внести доход/расход за ${ymLabel(d.ym)}</button>
     <button class="btn ghost" style="margin-top:8px" onclick="scanFinance()"><i class="ti ti-camera" style="margin-right:6px"></i>Распознать отчёт фото/PDF</button>
-    ${(d.trend && d.trend.length > 1) ? `<div class="sec-title" style="margin-top:16px">Динамика группы</div><div class="card" style="padding:6px 16px">${d.trend.map((t) => `<div class="li"><span class="t">${ymLabel(t.ym)}</span><span style="font-weight:700">${nf(t.total)} ₽</span></div>`).join("")}</div>` : ""}
-    <div class="lbl" style="padding:8px 2px">Пока вносишь вручную. Позже подключим интеграцию — цифры будут обновляться сами.</div>`;
+    <button class="btn ghost" style="margin-top:8px" onclick="uploadReport()">📥 Загрузить Excel‑отчёт (агрегатор / доход‑расход)</button>
+    ${(d.trend && d.trend.length > 1) ? `<div class="sec-title" style="margin-top:16px">Динамика чистой прибыли</div><div class="card" style="padding:6px 16px">${d.trend.map((t) => `<div class="li"><span class="t">${ymLabel(t.ym)}</span><span style="font-weight:700">${nf(t.total)} ₽</span></div>`).join("")}</div>` : ""}
+    <div class="lbl" style="padding:8px 2px">Прибыль = доход − ВСЕ расходы (офис, ЗП, налоги). Маржа агрегатора — валовая, идёт в доход направления «Агрегатор», из неё вычитаешь его расходы.</div>`;
 };
 function groupShift(n) {
   const cur = (window.__group && window.__group.ym) || new Date().toISOString().slice(0, 7);
@@ -648,22 +651,67 @@ function groupShift(n) {
 }
 function openGroupForm() {
   const d = window.__group || { rows: [], ym: groupYM };
+  const nf = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n || 0));
   el("create").innerHTML = `
-    <div class="sheet">
-      <h3>Прибыль за ${d.ym}</h3>
-      <div class="lbl" style="margin-bottom:8px">Прибыль по направлениям (₽) и доля (%)</div>
-      <div id="gform">${(d.rows || []).map((r, i) => `<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center"><div style="flex:1;font-size:13px;font-weight:600">${esc(r.name)}</div><input id="gp${i}" type="number" inputmode="numeric" placeholder="прибыль" value="${r.profit == null ? "" : r.profit}" style="width:108px"><input id="gs${i}" type="number" inputmode="numeric" placeholder="%" value="${Math.round((r.share == null ? 1 : r.share) * 100)}" style="width:54px"></div>`).join("")}</div>
+    <div class="sheet" style="max-height:85vh;overflow:auto">
+      <h3>Доход/расход за ${d.ym}</h3>
+      <div class="lbl" style="margin-bottom:8px">По направлению: доход и расход (₽), доля (%). Чистая = доход − расход.</div>
+      <div id="gform">${(d.rows || []).map((r, i) => `<div style="margin-bottom:10px;border-bottom:1px solid var(--line,#eee);padding-bottom:8px">
+        <div style="font-weight:700;font-size:13px;margin-bottom:4px">${esc(r.name)}${r.agg_suggest != null ? ` <span class="link" style="font-weight:600;cursor:pointer" onclick="gpSuggest(${i},${r.agg_suggest})">маржа агрегатора ${nf(r.agg_suggest)} →</span>` : ""}</div>
+        <div style="display:flex;gap:8px">
+          <input id="gi${i}" type="number" inputmode="numeric" placeholder="доход" value="${r.income == null ? "" : r.income}" style="flex:1">
+          <input id="ge${i}" type="number" inputmode="numeric" placeholder="расход" value="${r.expense == null ? "" : r.expense}" style="flex:1">
+          <input id="gs${i}" type="number" inputmode="numeric" placeholder="%" value="${Math.round((r.share == null ? 1 : r.share) * 100)}" style="width:52px">
+        </div></div>`).join("")}</div>
       <button class="btn red" style="margin-top:8px" onclick="saveGroupForm()">Сохранить</button>
       <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
     </div>`;
   el("create").classList.remove("hidden");
 }
+function gpSuggest(i, val) { const inp = el("gi" + i); if (inp) inp.value = val; }
+/* ---- загрузка Excel-отчёта с пометкой типа ---- */
+function uploadReport() {
+  el("create").innerHTML = `<div class="sheet"><h3>Загрузить отчёт (Excel)</h3>
+    <div class="lbl" style="margin-bottom:10px">Выбери тип — приложение разберёт файл и разложит куда надо.</div>
+    <button class="btn red" onclick="_pickReport('agg')">🧾 Агрегатор — маржа</button>
+    <div class="lbl" style="margin:4px 2px 10px">За вчерашний день; попадёт в «Агрегатор — маржа».</div>
+    <button class="btn red" onclick="_pickReport('finance')">📊 Доход / расход месяца</button>
+    <div class="lbl" style="margin:4px 2px 10px">ИИ распознает доход и расход по направлениям → проверишь и сохранишь.</div>
+    <button class="btn ghost" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function _pickReport(kind) {
+  _pickFile(async (f) => {
+    el("create").innerHTML = `<div class="sheet"><h3>Разбираю отчёт…</h3><div class="lbl">Секунду.</div></div>`;
+    el("create").classList.remove("hidden");
+    const b64 = await _toB64(f);
+    const r = await API.reportUpload({ kind, filename: f.name || "", data_b64: b64 });
+    if (!(r && r.ok !== false)) { closeCreate(); toast("Не вышло" + (r && r.error ? ": " + r.error : "")); return; }
+    const nf = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n || 0));
+    if (kind === "agg") {
+      closeCreate();
+      toast(`Агрегатор за ${r.date}: маржа ${nf(r.margin)} ₽ ✓`);
+      if (RENDER.agg) { aggYM = (r.date || "").slice(0, 7); aggMode = "month"; RENDER.agg(); }
+    } else {
+      groupYM = r.ym;
+      await RENDER.group();
+      openGroupForm();
+      (r.rows || []).forEach((pr) => {
+        const key = (pr.name || "").toLowerCase().slice(0, 5);
+        const idx = ((window.__group && window.__group.rows) || []).findIndex((rr) => rr.name.toLowerCase().includes(key) || (pr.name || "").toLowerCase().includes(rr.name.toLowerCase().slice(0, 5)));
+        if (idx >= 0) { if (el("gi" + idx)) el("gi" + idx).value = pr.income || 0; if (el("ge" + idx)) el("ge" + idx).value = pr.expense || 0; }
+      });
+      toast("Распознал — проверь доход/расход и сохрани");
+    }
+  }, ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
 async function saveGroupForm() {
   const d = window.__group || { rows: [] };
   const rows = (d.rows || []).map((r, i) => {
-    const p = el("gp" + i) ? el("gp" + i).value : "";
+    const inc = el("gi" + i) ? el("gi" + i).value : "";
+    const exp = el("ge" + i) ? el("ge" + i).value : "";
     const s = el("gs" + i) ? el("gs" + i).value : "";
-    return { name: r.name, profit: p === "" ? null : Number(p), share: s === "" ? 1 : Number(s) / 100 };
+    return { name: r.name, income: inc === "" ? null : Number(inc), expense: exp === "" ? null : Number(exp), share: s === "" ? 1 : Number(s) / 100 };
   });
   toast("Сохраняю…");
   const r = await API.groupSave(d.ym, rows);
@@ -770,7 +818,7 @@ function scanFinance() {
     (p.rows || []).forEach((pr) => {
       const key = (pr.name || "").toLowerCase().slice(0, 5);
       const idx = (d.rows || []).findIndex((rr) => rr.name.toLowerCase().includes(key) || (pr.name || "").toLowerCase().includes(rr.name.toLowerCase().slice(0, 5)));
-      if (idx >= 0 && pr.profit != null && el("gp" + idx)) el("gp" + idx).value = pr.profit;
+      if (idx >= 0 && pr.profit != null && el("gi" + idx)) el("gi" + idx).value = pr.profit;   // распознанное → в «доход»
     });
     toast("Подставил из отчёта — проверь и сохрани");
   });
@@ -853,6 +901,20 @@ RENDER.agg = async function () {
   const totCard = `<div class="card"><div class="lbl">${aggMode === "day" ? (r.date ? "День " + r.date.slice(8, 10) + "." + r.date.slice(5, 7) : "—") : "Свод за месяц"}</div>
     <div class="big">${fmt(t.margin || 0)}</div>
     <div class="row spread"><span class="lbl">выручка ${fmt(t.revenue || 0)} · себест. ${fmt(t.cost || 0)}</span><span class="lbl" style="font-weight:700;color:${margColor(t.pct)}">маржа ${t.pct || 0}%</span></div></div>`;
+  const be = r.breakeven || {}; window.__aggBE = be;
+  const beCard = `<div class="card">
+    <div class="lbl">🎯 Путь к безубыточности → прибыли (месяц)</div>
+    ${be.fixed ? `
+      <div class="row spread" style="margin-top:4px"><span class="lbl">Постоянные расходы</span><span style="font-weight:700">${fmt(be.fixed)} ₽</span></div>
+      <div class="row spread"><span class="lbl">Маржа накоплена</span><span style="font-weight:700">${fmt(be.month_margin)} ₽</span></div>
+      <div style="height:10px;background:#eee;border-radius:6px;overflow:hidden;margin:8px 0"><div style="height:100%;width:${Math.min(100, be.pct || 0)}%;background:${be.reached ? "#1F9D55" : "var(--red)"}"></div></div>
+      ${be.reached
+        ? `<div style="font-weight:800;color:#1F9D55">✅ Безубыточность пройдена · прибыль ${fmt(be.profit)} ₽</div>`
+        : `<div style="font-weight:800;color:var(--red)">До безубыточности: ${fmt(be.to_breakeven)} ₽ (${be.pct}%)</div>`}
+      <div class="lbl" style="margin-top:6px">Прогноз на конец месяца (${be.days_data}/${be.days_month} дн.): маржа ~${fmt(be.projected)} ₽ → ${be.projected_profit >= 0 ? "прибыль" : "недобор"} ${fmt(Math.abs(be.projected_profit))} ₽</div>
+      <button class="btn ghost" style="margin-top:8px" onclick="aggSetFixed()">Изменить постоянные расходы</button>`
+      : `<div class="lbl" style="margin-top:4px">Задай месячные постоянные расходы (аренда, ЗП, налоги) — покажу, сколько маржи осталось до безубыточности и сколько сверх — прибыль.</div><button class="btn red" style="margin-top:8px" onclick="aggSetFixed()">Задать постоянные расходы</button>`}
+  </div>`;
   const byReg = {}; rows.forEach((x) => { (byReg[x.region] = byReg[x.region] || []).push(x); });
   let body;
   if (!rows.length) {
@@ -864,8 +926,17 @@ RENDER.agg = async function () {
       return `<div class="sec-title">${esc(reg)} · маржа <span style="color:${margColor(pp)}">${pp}%</span></div><div class="card" style="padding:6px 16px">${list.map((x) => `<div class="li"><div class="t"><div style="font-weight:600">${esc(x.clinic)}</div><div class="m">выручка ${fmt(x.revenue)} · себест. ${fmt(x.cost)}</div></div><div style="text-align:right"><div style="font-weight:700">${fmt(x.margin)}</div><div class="m" style="color:${margColor(x.pct)}">${x.pct}%</div></div></div>`).join("")}</div>`;
     }).join("");
   }
-  el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1>${seg}${nav}${dayChips}${totCard}${body}<div class="lbl" style="padding:10px 2px 20px">Данные заносит агент из ежедневного отчёта на почте. Маржа = выручка − себестоимость.</div>`;
+  el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1>${seg}${nav}${dayChips}${totCard}${beCard}${body}<div class="lbl" style="padding:10px 2px 20px">Данные заносит агент из ежедневного отчёта на почте. Маржа = выручка − себестоимость. Постоянные расходы вычитаются только для «пути к прибыли» — сама маржа остаётся валовой.</div>`;
 };
+function aggSetFixed() {
+  const cur = (window.__aggBE && window.__aggBE.fixed) || "";
+  const v = prompt("Месячные постоянные расходы, ₽ (аренда, ЗП, налоги и пр.):", cur || "");
+  if (v == null) return;
+  const amount = Number(String(v).replace(/[^\d.]/g, ""));
+  if (!(amount >= 0)) { toast("Введите число"); return; }
+  toast("Сохраняю…");
+  API.aggFixedSet(amount, aggYM, "default").then((r) => { toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.agg(); });
+}
 RENDER.week = async function () {
   const w = await API.weekplan(profile);
   window.__overdue = w.overdue || [];

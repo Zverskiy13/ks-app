@@ -1666,6 +1666,31 @@ def _prev_ym(ym):
     return f"{y}-{m:02d}"
 
 
+def _fin_net(v):
+    """Чистая по направлению: dict{income,expense}→разница; число→как есть (legacy); иначе None."""
+    if isinstance(v, dict):
+        try:
+            return float(v.get("income") or 0) - float(v.get("expense") or 0)
+        except Exception:
+            return None
+    if isinstance(v, (int, float)):
+        return v
+    return None
+
+
+def _agg_month_by_region(ym):
+    """Месячная маржа агрегатора (валовая) по регионам из agg-daily."""
+    store = load_json(_agg_path(ym), {})
+    reg = {}
+    for _d, payload in (store or {}).items():
+        for r in payload.get("rows", []):
+            m = (r.get("revenue", 0) or 0) - (r.get("cost", 0) or 0)
+            reg[r.get("region", "—")] = reg.get(r.get("region", "—"), 0) + m
+    out = {k: round(v) for k, v in reg.items()}
+    out["_total"] = round(sum(reg.values()))
+    return out
+
+
 @app.get("/api/group")
 def group(user=Depends(require_owner), ym: str = ""):
     months = load_json("state/finance_months.json", {})
@@ -1677,18 +1702,30 @@ def group(user=Depends(require_owner), ym: str = ""):
     prev = _prev_ym(ym)
     pdata = months.get(prev, {})
     names = list(dict.fromkeys(list(dirs.keys()) + list(data.keys())))
+    agg = _agg_month_by_region(ym)
     rows = []
     total = owner = 0.0
     for n in names:
-        p = data.get(n)
+        v = data.get(n)
         share = dirs.get(n, 1.0)
-        rows.append({"name": n, "profit": p, "prev": pdata.get(n), "share": share})
-        if isinstance(p, (int, float)):
-            total += p
-            owner += p * share
-    trend = [{"ym": y, "total": sum(v for v in months[y].values() if isinstance(v, (int, float)))} for y in allym[-6:]]
+        net = _fin_net(v)
+        inc = v.get("income") if isinstance(v, dict) else (v if isinstance(v, (int, float)) else None)
+        exp = v.get("expense") if isinstance(v, dict) else None
+        sug = None
+        for reg, mv in agg.items():
+            if reg != "_total" and reg.lower() in n.lower():
+                sug = mv
+                break
+        rows.append({"name": n, "income": inc, "expense": exp, "net": net,
+                     "prev_net": _fin_net(pdata.get(n)), "share": share, "agg_suggest": sug})
+        if isinstance(net, (int, float)):
+            total += net
+            owner += net * share
+    trend = [{"ym": y, "total": round(sum((_fin_net(v) or 0) for v in months[y].values()))} for y in allym[-6:]]
+    goal = load_json("state/finance.json", {}).get("goal_income", 5000000)
     return {"ym": ym, "prev_ym": prev, "rows": rows, "total": round(total),
-            "owner_income": round(owner), "months": allym, "trend": trend}
+            "owner_income": round(owner), "goal": goal, "agg_total": agg.get("_total", 0),
+            "months": allym, "trend": trend}
 
 
 class GroupSave(BaseModel):
@@ -1705,13 +1742,22 @@ def group_save(b: GroupSave):
         nm = (r.get("name") or "").strip()
         if not nm:
             continue
-        pr = r.get("profit")
-        try:
-            pr = float(pr) if pr not in (None, "") else None
-        except Exception:
-            pr = None
-        if pr is not None:
-            md[nm] = pr
+        inc, exp = r.get("income"), r.get("expense")
+        if inc not in (None, "") or exp not in (None, ""):
+            def _f(x):
+                try:
+                    return float(x) if x not in (None, "") else 0.0
+                except Exception:
+                    return 0.0
+            md[nm] = {"income": _f(inc), "expense": _f(exp)}
+        else:
+            pr = r.get("profit")
+            try:
+                pr = float(pr) if pr not in (None, "") else None
+            except Exception:
+                pr = None
+            if pr is not None:
+                md[nm] = pr
         sh = r.get("share")
         try:
             if sh not in (None, ""):
@@ -1722,6 +1768,76 @@ def group_save(b: GroupSave):
     ok1 = gh_write("state/finance_months.json", json.dumps(months, ensure_ascii=False, indent=2), f"app: финансы группы {b.ym}")
     ok2 = gh_write("state/finance_dirs.json", json.dumps(dirs, ensure_ascii=False, indent=2), "app: доли направлений")
     return {"ok": ok1 and ok2}
+
+
+class ReportUpload(BaseModel):
+    kind: str                 # "agg" | "finance"
+    filename: str = ""
+    data_b64: str
+    date: str = ""            # agg: дата данных (по умолчанию вчера)
+    ym: str = ""              # finance: месяц
+
+
+@app.post("/api/report/upload")
+def report_upload(b: ReportUpload, user=Depends(require_owner)):
+    """Ручная загрузка Excel-отчёта с пометкой типа: агрегатор → в свод; доход/расход → ИИ → на подтверждение."""
+    try:
+        raw = base64.b64decode(b.data_b64.split(",")[-1])
+    except Exception:
+        return {"ok": False, "error": "битый файл"}
+    if len(raw) > 12 * 1024 * 1024:
+        return {"ok": False, "error": "файл больше 12 МБ"}
+    try:
+        grid = _xls_grid(raw, b.filename)
+    except Exception as e:
+        return {"ok": False, "error": "не удалось прочитать Excel: " + str(e)[:120]}
+
+    if b.kind == "agg":
+        rows = _agg_parse_grid(grid)
+        if not rows or sum(r["revenue"] for r in rows) <= 0:
+            return {"ok": False, "error": "формат отчёта агрегатора не распознан"}
+        d = b.date or (dt.date.today() - dt.timedelta(days=1)).isoformat()
+        ym = d[:7]
+        store, safe = load_store_safe(_agg_path(ym))
+        if not safe:
+            return {"ok": False, "error": "чтение свода не удалось — повторите"}
+        store[d] = {"rows": rows, "source": "upload:" + (b.filename or ""),
+                    "ts": dt.datetime.now().isoformat(timespec="minutes")}
+        ok = gh_write(_agg_path(ym), json.dumps(store, ensure_ascii=False, indent=2), f"agg upload {d}")
+        rev = sum(r["revenue"] for r in rows)
+        cost = sum(r["cost"] for r in rows)
+        return {"ok": ok, "kind": "agg", "date": d, "rows": len(rows),
+                "revenue": rev, "cost": cost, "margin": rev - cost}
+
+    if b.kind == "finance":
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not key:
+            return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+        text = "\n".join("\t".join(str(c) for c in row) for row in grid[:400])[:12000]
+        prompt = ("В таблице — месячный управленческий отчёт по направлениям компании (доходы и расходы). "
+                  "Верни СТРОГО JSON без markdown: "
+                  '{"ym":"YYYY-MM или пусто","rows":[{"name":"направление","income":число,"expense":число}]}. '
+                  "income — совокупный доход направления за месяц, expense — совокупные расходы (рубли, без пробелов). "
+                  "Направления бери как в таблице. Чего нет — ставь 0.")
+        body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1200,
+                "messages": [{"role": "user", "content": prompt + "\n\nТАБЛИЦА:\n" + text}]}
+        try:
+            r = requests.post("https://api.anthropic.com/v1/messages",
+                              headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                              json=body, timeout=120)
+            if r.status_code != 200:
+                return {"ok": False, "error": f"claude {r.status_code}: {r.text[:120]}"}
+            txt = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+            data = json.loads(txt.replace("```json", "").replace("```", "").strip())
+        except Exception as e:
+            return {"ok": False, "error": "разбор ИИ: " + str(e)[:120]}
+        ym = b.ym or data.get("ym") or dt.date.today().strftime("%Y-%m")
+        parsed = [{"name": (x.get("name") or "").strip(),
+                   "income": x.get("income") or 0, "expense": x.get("expense") or 0}
+                  for x in (data.get("rows") or []) if (x.get("name") or "").strip()]
+        return {"ok": True, "kind": "finance", "ym": ym, "rows": parsed}
+
+    return {"ok": False, "error": "неизвестный тип отчёта"}
 
 
 # ---------- голос → текст (Whisper) ----------
@@ -2155,6 +2271,48 @@ def finance_ingest(b: FinIngest):
             "margin": rev - cost, "pct": round((rev - cost) / rev * 100, 1) if rev else 0}
 
 
+def _agg_fixed(ym):
+    """Месячные постоянные расходы (для пути к безубыточности). months[ym] или default."""
+    cfg = load_json("state/agg_fixed.json", {}) or {}
+    if not isinstance(cfg, dict):
+        return 0.0
+    m = cfg.get("months", {}) or {}
+    try:
+        return float(m[ym]) if ym in m else float(cfg.get("default", 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def _days_in_month(ym):
+    try:
+        y, mo = int(ym[:4]), int(ym[5:7])
+        first = dt.date(y, mo, 1)
+        nxt = dt.date(y + 1, 1, 1) if mo == 12 else dt.date(y, mo + 1, 1)
+        return (nxt - first).days
+    except Exception:
+        return 30
+
+
+class AggFixed(BaseModel):
+    amount: float
+    ym: str = ""
+    scope: str = "default"    # "default" — на все месяцы; "month" — только на ym
+
+
+@app.post("/api/finance/fixed")
+def finance_fixed(b: AggFixed, user=Depends(require_owner)):
+    cfg = load_json("state/agg_fixed.json", {}) or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg.setdefault("months", {})
+    if b.scope == "month" and b.ym:
+        cfg["months"][b.ym] = float(b.amount)
+    else:
+        cfg["default"] = float(b.amount)
+    ok = gh_write("state/agg_fixed.json", json.dumps(cfg, ensure_ascii=False, indent=2), "app: постоянные расходы")
+    return {"ok": ok}
+
+
 @app.get("/api/finance/agg")
 def finance_agg(user=Depends(require_owner), ym: str = "", mode: str = "month", date: str = ""):
     ym = ym or dt.date.today().strftime("%Y-%m")
@@ -2178,7 +2336,23 @@ def finance_agg(user=Depends(require_owner), ym: str = "", mode: str = "month", 
     tcost = sum(r["cost"] for r in rows)
     totals = {"revenue": trev, "cost": tcost, "margin": trev - tcost,
               "pct": round((trev - tcost) / trev * 100, 1) if trev else 0}
-    return {"ok": True, "ym": ym, "mode": mode, "date": d, "dates": dates, "rows": rows, "totals": totals}
+    # путь к безубыточности → прибыли (считаем по всему месяцу, независимо от режима)
+    m_rev = sum((r.get("revenue", 0) or 0) for p in store.values() for r in p.get("rows", []))
+    m_cost = sum((r.get("cost", 0) or 0) for p in store.values() for r in p.get("rows", []))
+    m_margin = m_rev - m_cost
+    fixed = _agg_fixed(ym)
+    ddata, dmonth = len(dates), _days_in_month(ym)
+    projected = round(m_margin / ddata * dmonth) if ddata else 0
+    breakeven = {"fixed": round(fixed), "month_margin": round(m_margin),
+                 "to_breakeven": round(max(0, fixed - m_margin)),
+                 "profit": round(m_margin - fixed),
+                 "pct": round(min(100, m_margin / fixed * 100), 1) if fixed > 0 else 0,
+                 "reached": (m_margin >= fixed) if fixed > 0 else False,
+                 "projected": projected,
+                 "projected_profit": round(projected - fixed) if fixed > 0 else projected,
+                 "days_data": ddata, "days_month": dmonth}
+    return {"ok": True, "ym": ym, "mode": mode, "date": d, "dates": dates, "rows": rows,
+            "totals": totals, "breakeven": breakeven}
 
 
 # ---------- АГЕНТ: ежедневный отчёт по марже с почты (IMAP + .xls) ----------
@@ -2217,15 +2391,33 @@ def _agg_segment(cat):
     return "корпы" if "корп" in str(cat).lower() else "медцентры"
 
 
-def _agg_parse_xls(raw):
-    """Разбор .xls отчёта -> строки, агрегированные по (регион, сегмент)."""
+def _xls_grid(raw, filename=""):
+    """Единая сетка ячеек (строки×колонки как строки) для .xls (xlrd) и .xlsx (openpyxl)."""
+    fn = (filename or "").lower()
+    is_xlsx = fn.endswith(".xlsx") or raw[:2] == b"PK"   # .xlsx — это zip (сигнатура PK)
+    if is_xlsx:
+        import openpyxl
+        import io as _io
+        wb = openpyxl.load_workbook(_io.BytesIO(raw), read_only=True, data_only=True)
+        sh = wb[wb.sheetnames[0]]
+        grid = []
+        for row in sh.iter_rows(values_only=True):
+            grid.append(["" if c is None else str(c) for c in row])
+        return grid
     import xlrd
     book = xlrd.open_workbook(file_contents=raw)
     sh = book.sheet_by_index(0)
+    return [[str(sh.cell_value(ri, ci)) for ci in range(sh.ncols)] for ri in range(sh.nrows)]
+
+
+def _agg_parse_grid(grid):
+    """Разбор сетки отчёта агрегатора -> строки по (регион, сегмент)."""
+    def cell(row, ci):
+        return row[ci] if ci < len(row) else ""
     hdr = None
     cols = {}
-    for ri in range(min(sh.nrows, 30)):
-        vals = [str(sh.cell_value(ri, ci)).strip().lower() for ci in range(sh.ncols)]
+    for ri in range(min(len(grid), 30)):
+        vals = [str(c).strip().lower() for c in grid[ri]]
         joined = " ".join(vals)
         if "наименование" in joined and ("счет" in joined or "счёт" in joined):
             hdr = ri
@@ -2237,29 +2429,33 @@ def _agg_parse_xls(raw):
                 elif "себестоим" in v:
                     cols["cost"] = ci
             break
-    if hdr is None or "name" not in cols or "rev" not in cols or "cost" not in cols:
+    if hdr is None or not all(k in cols for k in ("name", "rev", "cost")):
         return []
     agg = {}
     cat = None
-    for ri in range(hdr + 1, sh.nrows):
-        name = str(sh.cell_value(ri, cols["name"])).replace("\n", " ").strip()
+    for ri in range(hdr + 1, len(grid)):
+        row = grid[ri]
+        name = str(cell(row, cols["name"])).replace("\n", " ").strip()
         if not name:
             continue
         if "ИТОГО" in name.upper():
             continue
-        rev = _agg_num(sh.cell_value(ri, cols["rev"]))
-        cost = _agg_num(sh.cell_value(ri, cols["cost"]))
+        rev = _agg_num(cell(row, cols["rev"]))
+        cost = _agg_num(cell(row, cols["cost"]))
         if rev is None and cost is None:
             cat = name
             continue
         reg = _agg_region(cat, name)
         seg = _agg_segment(cat)
-        key = (reg, seg)
-        a = agg.setdefault(key, [0, 0])
+        a = agg.setdefault((reg, seg), [0, 0])
         a[0] += rev or 0
         a[1] += cost or 0
     return [{"region": r, "clinic": s, "revenue": round(v[0]), "cost": round(v[1])}
             for (r, s), v in agg.items()]
+
+
+def _agg_parse_xls(raw):
+    return _agg_parse_grid(_xls_grid(raw, ""))
 
 
 def _agg_fetch_latest_xls():

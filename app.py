@@ -2319,8 +2319,13 @@ class FinIngest(BaseModel):
 @app.post("/api/finance/ingest")
 def finance_ingest(b: FinIngest):
     need = os.environ.get("INGEST_TOKEN", "")
-    if need and b.token != need:
-        return {"ok": False, "error": "Неверный токен"}
+    if not need:
+        # Токен не задан → приём внешних заносов ВЫКЛЮЧЕН (не пропускаем без проверки).
+        # Штатный путь — /api/report/upload (под сессией) и почтовый _agg_email_pull.
+        return JSONResponse({"ok": False, "error": "Внешний импорт отключён: не задан INGEST_TOKEN"},
+                            status_code=503)
+    if not hmac.compare_digest(b.token or "", need):
+        return JSONResponse({"ok": False, "error": "Неверный токен"}, status_code=403)
     try:
         d = dt.date.fromisoformat(b.date)
     except Exception:

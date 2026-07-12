@@ -240,6 +240,7 @@ const RENDER = {
       <div class="card" style="padding:6px 16px">
         <div class="li" onclick="enablePush()"><i class="ti ti-bell-ringing" style="font-size:20px;color:var(--red)"></i><div class="t">Уведомления</div><span class="lbl" id="pushState">включить</span></div>
         <div class="li" onclick="openNotifSettings()"><i class="ti ti-settings" style="font-size:20px;color:var(--red)"></i><div class="t">Настройка уведомлений</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
+        ${admin ? `<div class="li" onclick="openLoginAudit()"><i class="ti ti-shield-lock" style="font-size:20px;color:var(--red)"></i><div class="t">Журнал входов</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         <div class="li" onclick="show('journal')"><i class="ti ti-notebook" style="font-size:20px;color:var(--red)"></i><div class="t">Дневник / заметки</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
         ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
@@ -348,7 +349,12 @@ async function saveCreate() {
   const a = document.querySelector("#nav button.on"); const s = a ? a.dataset.s : "home";
   if (RENDER[s]) RENDER[s]();
 }
-function logout() { profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
+function logout() { try { API.logout(); } catch (e) {} profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
+/* сессия истекла (сервер вернул 401) → на экран входа */
+function onAuthExpired() { if (!profile) return; profile = null; try { el("app").classList.add("hidden"); el("login").classList.remove("hidden"); toast("Сессия истекла — войдите заново"); } catch (e) {} }
+/* авто-вход по действующей cookie-сессии */
+async function bootAuth() { try { const r = await API.authMe(); if (r && r.ok && r.profile) { profile = r.profile; enterApp(); } } catch (e) {} }
+bootAuth();
 
 function reopenTask(id) {
   const t = (window.__tasks || []).find((x) => x.id === id);
@@ -953,6 +959,17 @@ async function saveNotifSettings() {
   toast("Сохраняю…");
   const r = await API.notifSave(st);
   closeCreate(); toast(r && r.ok !== false ? "Настройки сохранены ✓" : "Не удалось");
+}
+async function openLoginAudit() {
+  el("create").innerHTML = `<div class="sheet"><h3>Журнал входов</h3><div class="lbl">Загружаю…</div></div>`;
+  el("create").classList.remove("hidden");
+  const r = await API.auditLogins("");
+  if (!(r && r.ok)) { closeCreate(); toast("Не удалось загрузить"); return; }
+  const rows = (r.logins || []).map((x) => `<div class="li"><div class="t"><div style="font-weight:600">${x.ok ? "✅ вход" : "⛔ отказ"}${x.uid ? " · " + esc(x.uid) : ""}</div><div class="m">${esc((x.ts || "").replace("T", " ").slice(0, 16))} · ${esc(x.ip || "")}</div></div></div>`).join("");
+  el("create").innerHTML = `<div class="sheet" style="max-height:82vh;overflow:auto"><h3>Журнал входов · ${esc(r.ym || "")}</h3>
+    <div class="card" style="padding:4px 16px">${rows || '<div class="lbl">Записей нет</div>'}</div>
+    <div class="lbl" style="padding:8px 2px 0">Последние входы и отказы (успех / неверный PIN / блокировка), с IP и временем.</div>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Закрыть</button></div>`;
 }
 /* ---- синк графика чекапов на сервер для пуш-напоминаний (только название+дата) ---- */
 function hsSyncCheckups() {

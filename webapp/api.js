@@ -73,12 +73,18 @@ function inScope(company, profile) {
 function mine(assignee, profile) { return assignee === profile.id; }
 
 /* ---- API ---- */
+function _authJson(r) {
+  if (r.status === 401 && typeof onAuthExpired === "function") { try { onAuthExpired(); } catch (e) {} }
+  return r.json().catch(() => ({ ok: false }));
+}
 const API = {
   async login(pin) {
-    if (USE_REMOTE) return fetch(`${API_BASE}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin }) }).then(r => r.json());
+    if (USE_REMOTE) return fetch(`${API_BASE}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ pin }) }).then(r => r.json());
     const u = USERS[pin];
     return u ? { ok: true, profile: { ...u, sections: ROLE_SECTIONS[u.role] } } : { ok: false };
   },
+  authMe() { return USE_REMOTE ? fetch(`${API_BASE}/auth/me`, { credentials: "same-origin" }).then(r => r.json()).catch(() => ({ ok: false })) : Promise.resolve({ ok: false }); },
+  logout() { return USE_REMOTE ? fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "same-origin" }).then(r => r.json()).catch(() => ({})) : Promise.resolve({}); },
 
   async today(profile) {
     if (USE_REMOTE) return this._get("today", profile);
@@ -127,7 +133,7 @@ const API = {
 
   async _post(path, body) {
     if (USE_REMOTE) return fetch(`${API_BASE}/${path}`, { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
+      headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(body) }).then(_authJson);
     return { ok: true };
   },
   addTask(text, company, priority, due) { return this._post("tasks/add", { text, company: company || "", priority: priority || "🟡", due: due || "" }); },
@@ -180,6 +186,7 @@ const API = {
   notifGet() { return USE_REMOTE ? fetch(`${API_BASE}/notif/settings`).then(r => r.json()) : Promise.resolve({ ok: false }); },
   notifSave(settings) { return this._post("notif/settings", { settings }); },
   healthCheckups(items) { return this._post("health/checkups", { items }); },
+  auditLogins(ym) { return USE_REMOTE ? fetch(`${API_BASE}/audit/logins?ym=${ym || ""}`, { credentials: "same-origin" }).then(_authJson) : Promise.resolve({ ok: false }); },
 
   async deals(profile) {
     if (USE_REMOTE) return this._get("deals", profile);
@@ -201,7 +208,7 @@ const API = {
   },
 
   _get(path, profile) {
-    return fetch(`${API_BASE}/${path}?user=${encodeURIComponent(profile.id)}`).then(r => r.json());
+    return fetch(`${API_BASE}/${path}?user=${encodeURIComponent(profile.id)}`, { credentials: "same-origin" }).then(_authJson);
   }
 };
 

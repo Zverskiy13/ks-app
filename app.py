@@ -12,7 +12,9 @@ ENV (Railway → Variables):
 Старт: uvicorn app:app --host 0.0.0.0 --port $PORT   (см. Procfile)
 """
 import os, json, base64, re, threading, time as _time, datetime as dt
-from fastapi import FastAPI, HTTPException
+import hmac, hashlib, secrets
+from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -71,7 +73,177 @@ DEFAULT_PINS = {
 PINS = json.loads(os.environ["APP_PINS"]) if os.environ.get("APP_PINS") else DEFAULT_PINS
 
 app = FastAPI(title="Клиники Столицы")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+_ORIGINS = [o.strip() for o in os.environ.get("APP_ORIGIN", "").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_ORIGINS, allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
+
+
+# ================= БЕЗОПАСНОСТЬ: сессии (HttpOnly cookie) + scrypt для PIN =================
+SECRET_KEY = os.environ.get("SECRET_KEY") or hashlib.sha256(("ks-sess-" + (GH_TOKEN or "local-dev")).encode()).hexdigest()
+# ротация ключа: подписываем текущим, проверяем текущим + старым (SECRET_KEY_OLD)
+_SECRETS = [SECRET_KEY.encode()] + ([os.environ["SECRET_KEY_OLD"].encode()] if os.environ.get("SECRET_KEY_OLD") else [])
+SESSION_COOKIE = "ks_session"
+SESSION_TTL = int(os.environ.get("SESSION_TTL_DAYS", "30")) * 86400
+SESSION_SECURE = os.environ.get("SESSION_INSECURE", "") != "1"   # по умолчанию Secure (только HTTPS)
+
+
+def _scrypt(pin, salt):
+    return hashlib.scrypt(str(pin).encode("utf-8"), salt=salt, n=16384, r=8, p=1, dklen=32)
+
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64u_dec(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _build_pin_table():
+    """Хеши PIN (scrypt). Источник: APP_PIN_HASHES (готовые хеши) либо APP_PINS/дефолт (хешируем при старте)."""
+    table = []
+    raw = os.environ.get("APP_PIN_HASHES")
+    if raw:
+        try:
+            for rec in json.loads(raw):
+                table.append({"salt": bytes.fromhex(rec["salt"]), "hash": bytes.fromhex(rec["hash"]),
+                              "profile": {k: rec[k] for k in ("id", "name", "role", "companies", "title") if k in rec}})
+            return table
+        except Exception:
+            pass
+    for pin, prof in PINS.items():
+        salt = secrets.token_bytes(16)
+        table.append({"salt": salt, "hash": _scrypt(pin, salt), "profile": prof})
+    return table
+
+
+PIN_TABLE = _build_pin_table()
+
+
+def verify_pin(pin):
+    for rec in PIN_TABLE:
+        if hmac.compare_digest(_scrypt(pin or "", rec["salt"]), rec["hash"]):
+            return rec["profile"]
+    return None
+
+
+def make_session(uid):
+    exp = int(_time.time()) + SESSION_TTL
+    payload = _b64u(json.dumps({"uid": uid, "exp": exp}, separators=(",", ":")).encode())
+    sig = _b64u(hmac.new(_SECRETS[0], payload.encode(), hashlib.sha256).digest())
+    return payload + "." + sig
+
+
+def read_session(token):
+    if not token or "." not in token:
+        return None
+    payload, sig = token.rsplit(".", 1)
+    if not any(hmac.compare_digest(sig, _b64u(hmac.new(sec, payload.encode(), hashlib.sha256).digest())) for sec in _SECRETS):
+        return None
+    try:
+        data = json.loads(_b64u_dec(payload))
+    except Exception:
+        return None
+    if int(data.get("exp", 0)) < int(_time.time()):
+        return None
+    return data
+
+
+def _set_session_cookie(resp, uid):
+    resp.set_cookie(SESSION_COOKIE, make_session(uid), max_age=SESSION_TTL,
+                    httponly=True, secure=SESSION_SECURE, samesite="lax", path="/")
+
+
+def _clear_session_cookie(resp):
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+
+
+# антибрутфорс входа (в памяти, по IP)
+_LOGIN_FAILS = {}
+
+
+def _login_gate(ip):
+    rec = _LOGIN_FAILS.get(ip)
+    return not (rec and rec.get("until", 0) > _time.time())
+
+
+def _login_fail(ip):
+    rec = _LOGIN_FAILS.get(ip, {"n": 0, "until": 0})
+    rec["n"] += 1
+    if rec["n"] >= 5:
+        rec["until"] = _time.time() + 300   # блок на 5 минут после 5 неудач
+        rec["n"] = 0
+    _LOGIN_FAILS[ip] = rec
+
+
+def _login_ok(ip):
+    _LOGIN_FAILS.pop(ip, None)
+
+
+def _token_from(request):
+    tok = request.cookies.get(SESSION_COOKIE)
+    if not tok:
+        auth = request.headers.get("authorization", "")
+        if auth.startswith("Bearer "):
+            tok = auth[7:]
+    return tok
+
+
+def current_user(request: Request):
+    data = read_session(_token_from(request))
+    if not data:
+        raise HTTPException(401, "Не авторизовано")
+    return by_id(data["uid"])
+
+
+def require_owner(request: Request):
+    u = current_user(request)
+    if u.get("role") != "owner":
+        raise HTTPException(403, "Доступно только владельцу")
+    return u
+
+
+def _prof(u):
+    return u if isinstance(u, dict) else by_id(u)
+
+
+_AUTH_WHITELIST = {"/api/login", "/api/auth/login", "/api/auth/me", "/api/auth/logout"}
+
+
+@app.middleware("http")
+async def _auth_guard(request: Request, call_next):
+    p = request.url.path
+    if p.startswith("/api/") and p not in _AUTH_WHITELIST:
+        if not read_session(_token_from(request)):
+            return JSONResponse({"ok": False, "error": "Не авторизовано"}, status_code=401)
+    return await call_next(request)
+
+
+MAX_BODY = int(os.environ.get("MAX_BODY_MB", "15")) * 1024 * 1024
+_CSP = ("default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+        "img-src 'self' data: blob:; "
+        "frame-src 'self' data: blob:; "
+        "connect-src 'self'; object-src 'none'; base-uri 'self'; "
+        "form-action 'self'; frame-ancestors 'none'")
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    if request.method in ("POST", "PUT", "PATCH"):
+        cl = request.headers.get("content-length", "")
+        if cl.isdigit() and int(cl) > MAX_BODY:
+            return JSONResponse({"ok": False, "error": "Слишком большой запрос"}, status_code=413)
+    resp = await call_next(request)
+    resp.headers["Content-Security-Policy"] = _CSP
+    resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "geolocation=(), camera=(self), microphone=(self)"
+    return resp
 
 
 _GH_CACHE = {}        # path -> (text, ts)
@@ -257,15 +429,76 @@ class Login(BaseModel):
     pin: str
 
 
-@app.post("/api/login")
-def login(b: Login):
-    u = PINS.get(b.pin)
-    if not u:
+def _client_ip(request):
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _audit_login(ip, ok, uid=""):
+    try:
+        ym = dt.date.today().strftime("%Y-%m")
+        path = f"state/audit/logins-{ym}.json"
+        log = load_json(path, [])
+        if not isinstance(log, list):
+            log = []
+        log.append({"ts": dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).isoformat(timespec="seconds"),
+                    "ip": ip, "ok": bool(ok), "uid": uid})
+        gh_write(path, json.dumps(log[-500:], ensure_ascii=False, indent=2), "audit: вход")
+    except Exception:
+        pass
+
+
+def _do_login(b, request, response):
+    ip = _client_ip(request)
+    if not _login_gate(ip):
+        _audit_login(ip, False, "blocked")
+        raise HTTPException(429, "Слишком много попыток. Подождите пару минут.")
+    prof = verify_pin(b.pin)
+    if not prof:
+        _login_fail(ip)
+        _audit_login(ip, False)
         raise HTTPException(401, "Неверный PIN")
-    return {"ok": True, "profile": {**u, "sections": ROLE_SECTIONS[u["role"]]}}
+    _login_ok(ip)
+    _audit_login(ip, True, prof["id"])
+    _set_session_cookie(response, prof["id"])
+    return {"ok": True, "profile": {**prof, "sections": ROLE_SECTIONS[prof["role"]]}}
 
 
-@app.get("/api/today")
+@app.get("/api/audit/logins")
+def audit_logins(user=Depends(require_owner), ym: str = ""):
+    ym = ym or dt.date.today().strftime("%Y-%m")
+    log = load_json(f"state/audit/logins-{ym}.json", [])
+    return {"ok": True, "ym": ym, "logins": (log or [])[-100:][::-1]}
+
+
+@app.post("/api/auth/login")
+def auth_login(b: Login, request: Request, response: Response):
+    return _do_login(b, request, response)
+
+
+@app.post("/api/login")
+def login_legacy(b: Login, request: Request, response: Response):
+    return _do_login(b, request, response)
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request, response: Response):
+    data = read_session(_token_from(request))
+    if not data:
+        return {"ok": False}
+    prof = by_id(data["uid"])
+    _set_session_cookie(response, prof["id"])   # скользящее продление сессии
+    return {"ok": True, "profile": {**prof, "sections": ROLE_SECTIONS[prof.get("role", "staff")]}}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    _clear_session_cookie(response)
+    return {"ok": True}
+
+
 def _occurs(a, d):
     """Является ли дата d (YYYY-MM-DD) вхождением блока сетки a (с учётом повтора)."""
     rep = a.get("repeat")
@@ -321,8 +554,9 @@ def _match_block(a, kind_date, start, text):
     return a.get("start") == start and a.get("text", "") == text and _occurs(a, kind_date)
 
 
-def today(user: str = ""):
-    profile = by_id(user)
+@app.get("/api/today")
+def today(user=Depends(current_user)):
+    profile = _prof(user)
     today_iso = dt.date.today().isoformat()
     agenda = []
     for a in load_json("state/agenda.json", []):
@@ -346,8 +580,8 @@ def today(user: str = ""):
 
 
 @app.get("/api/tasks")
-def tasks(user: str = ""):
-    profile = by_id(user)
+def tasks(user=Depends(current_user)):
+    profile = _prof(user)
     items = parse_tasks(gh_read("state/tasks.md") or "")
     if profile["role"] == "owner":
         return items
@@ -445,8 +679,8 @@ def deal_touch(b: Touch):
 
 
 @app.get("/api/deals")
-def deals(user: str = ""):
-    profile = by_id(user)
+def deals(user=Depends(current_user)):
+    profile = _prof(user)
     raw = load_json("state/deals.json", [])
     today_d = dt.date.today()
     out = []
@@ -465,8 +699,8 @@ def deals(user: str = ""):
 
 
 @app.get("/api/finance")
-def finance(user: str = ""):
-    profile = by_id(user)
+def finance(user=Depends(current_user)):
+    profile = _prof(user)
     fin = load_json("state/finance.json", {})
     comps = fin.get("companies", {}) or {}
     def num(v):
@@ -726,7 +960,7 @@ def journal(limit: int = 50):
 
 
 @app.get("/api/day")
-def day(user: str = "", date: str = ""):
+def day(user=Depends(current_user), date: str = ""):
     d = date or dt.date.today().isoformat()
     items = []
     for a in load_json("state/agenda.json", []):
@@ -1074,8 +1308,8 @@ def item_edit(b: ItemEdit):
 
 # ---------- дедлайны: список / правка / выполнено / добавить ----------
 @app.get("/api/deadlines")
-def deadlines_list(user: str = ""):
-    profile = by_id(user)
+def deadlines_list(user=Depends(current_user)):
+    profile = _prof(user)
     raw = load_json("state/deadlines.json", [])
     out = []
     for i, d in enumerate(raw):
@@ -1136,7 +1370,7 @@ def deadline_add(b: DlAdd):
 
 # ---------- цели и рычаги ----------
 @app.get("/api/goals")
-def goals(user: str = ""):
+def goals(user=Depends(current_user)):
     bosses = load_json("state/bosses.json", [])
     gl = []
     for g in bosses:
@@ -1153,7 +1387,7 @@ def goals(user: str = ""):
 
 # ---------- план недели ----------
 @app.get("/api/weekplan")
-def weekplan(user: str = ""):
+def weekplan(user=Depends(current_user)):
     ag = load_json("state/agenda.json", [])
     rems = load_json("state/reminders.json", [])
     today = dt.date.today()
@@ -1228,7 +1462,7 @@ def _ladder_goal(plan, streak):
 
 
 @app.get("/api/habits")
-def habits(user: str = ""):
+def habits(user=Depends(current_user)):
     plans = load_json("state/habit_plans.json", {})
     log = load_json("state/habits.json", {})
     today = dt.date.today()
@@ -1267,7 +1501,7 @@ def habit_done(b: HabitDone):
 
 # ---------- большие цели (год/месяц) ----------
 @app.get("/api/biggoals")
-def biggoals(user: str = ""):
+def biggoals(user=Depends(current_user)):
     g = load_json("state/big_goals.json", [])
     order = {"open": 0, "done": 1, "miss": 2}
     return sorted(g, key=lambda x: (order.get(x.get("status", "open"), 0),
@@ -1336,7 +1570,7 @@ def _prev_ym(ym):
 
 
 @app.get("/api/group")
-def group(user: str = "", ym: str = ""):
+def group(user=Depends(require_owner), ym: str = ""):
     months = load_json("state/finance_months.json", {})
     dirs = load_json("state/finance_dirs.json", {}) or dict(DEFAULT_DIRS)
     allym = sorted(months.keys())
@@ -1434,8 +1668,13 @@ def vision(b: Vision):
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    mime = (b.mime or "").lower()
+    if not (mime.startswith("image/") or "pdf" in mime):
+        return {"ok": False, "error": "Только фото или PDF"}
     data = b.image_b64.split(",")[-1]
-    is_pdf = "pdf" in (b.mime or "").lower()
+    if len(data) * 3 // 4 > 10 * 1024 * 1024:
+        return {"ok": False, "error": "Файл больше 10 МБ"}
+    is_pdf = "pdf" in mime
     if b.mode == "finance":
         prompt = ("На изображении/в документе — финансовый отчёт по направлениям компании. "
                   "Верни СТРОГО JSON без пояснений и без markdown: "
@@ -1487,6 +1726,11 @@ def _hfile_path(fid):
 
 @app.post("/api/health/file")
 def health_file_put(b: HFile):
+    mime = (b.mime or "").lower()
+    if not (mime.startswith("image/") or "pdf" in mime):
+        return {"ok": False, "error": "Недопустимый тип файла (только фото или PDF)"}
+    if len(b.data_b64.split(",")[-1]) * 3 // 4 > 8 * 1024 * 1024:
+        return {"ok": False, "error": "Файл больше 8 МБ"}
     fid = dt.datetime.now().strftime("%Y%m%d%H%M%S") + "-" + str(_time.time_ns() % 100000)
     rec = {"id": fid, "name": b.name, "mime": b.mime,
            "date": dt.date.today().isoformat(), "data": b.data_b64}
@@ -1548,7 +1792,7 @@ def health_advice(b: HAdvice):
 
 # ---------- объединённый главный экран (1 запрос вместо 3) ----------
 @app.get("/api/home")
-def home_combined(user: str = ""):
+def home_combined(user=Depends(current_user)):
     return {"agenda": today(user)["agenda"], "deadlines": deadlines_list(user), "tasks": tasks(user)}
 
 
@@ -1747,16 +1991,12 @@ def _pvl_ai(data):
 
 
 @app.get("/api/pvl/team")
-def pvl_team(user: str = ""):
-    if by_id(user).get("role") != "owner":
-        return {"ok": False, "error": "Доступно только владельцу"}
+def pvl_team(user=Depends(require_owner)):
     return {"ok": True, "team": _pvl_report_data(7)["team"]}
 
 
 @app.get("/api/pvl/report")
-def pvl_report(user: str = "", days: int = 7):
-    if by_id(user).get("role") != "owner":
-        return {"ok": False, "error": "Доступно только владельцу"}
+def pvl_report(user=Depends(require_owner), days: int = 7):
     days = 1 if int(days) <= 1 else 7
     data = _pvl_report_data(days)
     data["ai"] = _pvl_ai(data)
@@ -1819,9 +2059,7 @@ def finance_ingest(b: FinIngest):
 
 
 @app.get("/api/finance/agg")
-def finance_agg(user: str = "", ym: str = "", mode: str = "month", date: str = ""):
-    if by_id(user).get("role") != "owner":
-        return {"ok": False, "error": "Доступно только владельцу"}
+def finance_agg(user=Depends(require_owner), ym: str = "", mode: str = "month", date: str = ""):
     ym = ym or dt.date.today().strftime("%Y-%m")
     store = load_json(_agg_path(ym), {})
     dates = sorted(store.keys())
@@ -1999,9 +2237,7 @@ def _agg_email_pull():
 
 
 @app.get("/api/finance/pull")
-def finance_pull(user: str = ""):
-    if by_id(user).get("role") != "owner":
-        return {"ok": False, "error": "Доступно только владельцу"}
+def finance_pull(user=Depends(require_owner)):
     return _agg_email_pull()
 
 
@@ -2128,9 +2364,7 @@ class AssistantIn(BaseModel):
 
 
 @app.post("/api/assistant")
-def assistant(b: AssistantIn):
-    if by_id(b.user).get("role") != "owner":
-        return {"ok": False, "error": "Доступно только владельцу"}
+def assistant(b: AssistantIn, user=Depends(require_owner)):
     today_iso = dt.date.today().isoformat()
     cache_path = f"state/assistant/digest-{today_iso}.json"
     if b.mode == "cached":
@@ -2139,7 +2373,7 @@ def assistant(b: AssistantIn):
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
-    ctx = _assistant_context(b.user, b.health or {})
+    ctx = _assistant_context(user["id"], b.health or {})
     if b.mode == "ask":
         return _assistant_call(key, "ask", ctx, b.question or "")
     dg = _assistant_call(key, "digest", ctx, "")

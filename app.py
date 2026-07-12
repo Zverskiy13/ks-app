@@ -22,6 +22,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
+try:
+    import db as _db                    # Postgres-слой (Фаза 0). Спит, если DATABASE_URL не задан.
+except Exception:
+    _db = None
 
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GH_REPO = os.environ.get("GITHUB_REPO", "")
@@ -224,8 +228,8 @@ async def _auth_guard(request: Request, call_next):
 MAX_BODY = int(os.environ.get("MAX_BODY_MB", "15")) * 1024 * 1024
 _CSP = ("default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
-        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com https://cdn.jsdelivr.net; "
+        "font-src 'self' https://fonts.gstatic.com https://unpkg.com https://cdn.jsdelivr.net; "
         "img-src 'self' data: blob:; "
         "frame-src 'self' data: blob:; "
         "connect-src 'self'; object-src 'none'; base-uri 'self'; "
@@ -473,6 +477,22 @@ def audit_logins(user=Depends(require_owner), ym: str = ""):
     ym = ym or dt.date.today().strftime("%Y-%m")
     log = load_json(f"state/audit/logins-{ym}.json", [])
     return {"ok": True, "ym": ym, "logins": (log or [])[-100:][::-1]}
+
+
+# ---------- Postgres (Фаза 0): создание схемы при старте + статус ----------
+if _db and _db.db_available():
+    try:
+        _db.init_schema()
+        print("DB: схема инициализирована")
+    except Exception as _e:
+        print("DB init error:", _e)
+
+
+@app.get("/api/db/status")
+def db_status(user=Depends(require_owner)):
+    if not _db:
+        return {"connected": False, "reason": "модуль db не загружен"}
+    return _db.status()
 
 
 @app.post("/api/auth/login")

@@ -5,3 +5,4 @@ pydantic
 pillow>=10.1
 pywebpush
 xlrd
+psycopg[binary]>=3.1

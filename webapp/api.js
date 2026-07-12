@@ -42,6 +42,7 @@ const API = {
   finAgg(profile, ym, mode, date) { return _g(`finance/agg?ym=${ym || ""}&mode=${mode || "month"}&date=${date || ""}`); },
   healthFileGet(id) { return _g(`health/file?id=${encodeURIComponent(id)}`); },
   auditLogins(ym) { return _g(`audit/logins?ym=${ym || ""}`); },
+  dbStatus() { return _g("db/status"); },
   pushKey() { return _g("push/key"); },
   notifGet() { return _g("notif/settings"); },
 

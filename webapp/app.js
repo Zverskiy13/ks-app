@@ -22,26 +22,33 @@ function pickDay(iso) { curDay = iso; viewYM = iso.slice(0, 7); RENDER.day(); }
 function dayLabel(iso) { const d = new Date(iso); const t = new Date().toISOString().slice(0, 10); return (iso === t ? "Сегодня · " : "") + WD[d.getDay()] + " " + iso.slice(8, 10) + "." + iso.slice(5, 7); }
 
 /* ---------- PIN login ---------- */
+const PIN_MIN = 4, PIN_MAX = 8;
 function buildPad() {
   const pad = el("pad");
-  ["1","2","3","4","5","6","7","8","9","","0","⌫"].forEach((k) => {
+  ["1","2","3","4","5","6","7","8","9","✓","0","⌫"].forEach((k) => {
     const b = document.createElement("button");
-    b.className = "key" + (k === "" ? " blank" : "");
+    b.className = "key" + (k === "✓" ? " ok" : "");
     b.textContent = k;
     if (k === "⌫") b.innerHTML = '<i class="ti ti-backspace"></i>';
-    if (k !== "") b.onclick = () => press(k);
+    if (k === "✓") { b.innerHTML = '<i class="ti ti-arrow-right"></i>'; b.onclick = submitPin; }
+    else b.onclick = () => press(k);
     pad.appendChild(b);
   });
   drawDots();
 }
 function drawDots() {
-  el("dots").innerHTML = [0,1,2,3].map(i => `<span class="dot ${i < pin.length ? "f" : ""}"></span>`).join("");
+  const n = Math.min(PIN_MAX, Math.max(PIN_MIN, pin.length));
+  el("dots").innerHTML = Array.from({ length: n }, (_, i) => `<span class="dot ${i < pin.length ? "f" : ""}"></span>`).join("");
 }
 function press(k) {
   if (k === "⌫") pin = pin.slice(0, -1);
-  else if (pin.length < 4) pin += k;
+  else if (pin.length < PIN_MAX) pin += k;
   drawDots();
-  if (pin.length === 4) setTimeout(tryLogin, 120);
+  if (pin.length === PIN_MAX) setTimeout(tryLogin, 120);   // авто-вход при максимальной длине
+}
+function submitPin() {
+  if (pin.length >= PIN_MIN) tryLogin();
+  else el("dots").animate([{transform:"translateX(-6px)"},{transform:"translateX(6px)"},{transform:"translateX(0)"}],{duration:200});
 }
 async function tryLogin() {
   const res = await API.login(pin);
@@ -241,6 +248,7 @@ const RENDER = {
         <div class="li" onclick="enablePush()"><i class="ti ti-bell-ringing" style="font-size:20px;color:var(--red)"></i><div class="t">Уведомления</div><span class="lbl" id="pushState">включить</span></div>
         <div class="li" onclick="openNotifSettings()"><i class="ti ti-settings" style="font-size:20px;color:var(--red)"></i><div class="t">Настройка уведомлений</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         ${admin ? `<div class="li" onclick="openLoginAudit()"><i class="ti ti-shield-lock" style="font-size:20px;color:var(--red)"></i><div class="t">Журнал входов</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
+        ${admin ? `<div class="li" onclick="openDbStatus()"><i class="ti ti-database" style="font-size:20px;color:var(--red)"></i><div class="t">Состояние БД</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         <div class="li" onclick="show('journal')"><i class="ti ti-notebook" style="font-size:20px;color:var(--red)"></i><div class="t">Дневник / заметки</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
         ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
@@ -970,6 +978,20 @@ async function openLoginAudit() {
     <div class="card" style="padding:4px 16px">${rows || '<div class="lbl">Записей нет</div>'}</div>
     <div class="lbl" style="padding:8px 2px 0">Последние входы и отказы (успех / неверный PIN / блокировка), с IP и временем.</div>
     <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Закрыть</button></div>`;
+}
+async function openDbStatus() {
+  el("create").innerHTML = `<div class="sheet"><h3>Состояние БД</h3><div class="lbl">Проверяю…</div></div>`;
+  el("create").classList.remove("hidden");
+  const r = await API.dbStatus();
+  let body;
+  if (!r || r.connected === false) {
+    body = `<div class="card"><div class="t">Postgres не подключён</div><div class="lbl" style="margin-top:4px">${esc((r && (r.reason || r.error)) || "нет ответа")}</div><div class="lbl" style="margin-top:6px">Приложение работает на GitHub-хранилище. Чтобы включить БД — добавь сервис Postgres на Railway (он задаст DATABASE_URL) и передеплой.</div></div>`;
+  } else {
+    const t = r.tables || {};
+    const rows = Object.keys(t).sort().map((k) => `<div class="li"><div class="t">${esc(k)}</div><span class="lbl">${t[k] == null ? "—" : t[k]}</span></div>`).join("");
+    body = `<div class="card"><div class="t" style="color:#1F9D55;font-weight:700">✅ Postgres подключён</div><div class="lbl" style="margin-top:2px">Таблиц: ${r.count || 0}</div></div><div class="sec-title" style="margin-top:10px">Таблицы (строк)</div><div class="card" style="padding:4px 16px">${rows || '<div class="lbl">пусто</div>'}</div>`;
+  }
+  el("create").innerHTML = `<div class="sheet" style="max-height:82vh;overflow:auto"><h3>Состояние БД</h3>${body}<div class="lbl" style="padding:8px 2px 0">Фаза 0: схема создана, данные пока в GitHub — переносим по одному домену.</div><button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Закрыть</button></div>`;
 }
 /* ---- синк графика чекапов на сервер для пуш-напоминаний (только название+дата) ---- */
 function hsSyncCheckups() {

@@ -264,8 +264,8 @@ def _storage_db(path):
         return False
     if os.environ.get("STORAGE_BACKEND", "github") != "db":
         return False
-    if path.startswith("state/workload/"):
-        return False
+    if path.startswith("state/workload/") or path == "state/heartbeat.json":
+        return False                       # живые данные бота — читаем из GitHub, не из KV
     return True
 
 
@@ -1302,6 +1302,32 @@ def _push_all(title, body, url="/"):
         except Exception:
             pass
     return n
+
+
+# ---------- сторож бота: пуш владельцу, если бот замолчал (Этап D) ----------
+_BOT_WD = {"down": False}
+
+
+def _bot_watchdog():
+    """Читает heartbeat бота (state/heartbeat.json, живёт в GitHub) и шлёт пуш,
+       если отметка старше BOT_DOWN_MIN минут. Один пуш на простой + один при восстановлении."""
+    if not push_ready():
+        return
+    hb = load_json("state/heartbeat.json", {})
+    try:
+        ts = int(hb.get("ts", 0)) if isinstance(hb, dict) else 0
+    except Exception:
+        ts = 0
+    if not ts:
+        return                              # отметки ещё нет (бот не обновлён) — не тревожим
+    silent = _time.time() - ts
+    thr = int(os.environ.get("BOT_DOWN_MIN", "15")) * 60
+    if silent > thr and not _BOT_WD["down"]:
+        _push_all("⚠️ Бот не отвечает", f"Молчит {int(silent // 60)} мин. Проверьте сервис бота в Railway.", "/")
+        _BOT_WD["down"] = True
+    elif silent <= thr and _BOT_WD["down"]:
+        _push_all("✅ Бот снова в строю", "Бот отвечает штатно.", "/")
+        _BOT_WD["down"] = False
 
 
 class HCheckups(BaseModel):
@@ -2892,6 +2918,7 @@ def _push_reminders_loop():
             _evening_push()
             _daily_notifications()
             _agg_email_daily()
+            _bot_watchdog()
         except Exception as e:
             print(f"push reminders: {e}")
         _time.sleep(60)

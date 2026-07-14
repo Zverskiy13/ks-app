@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>Клиники Столицы</title>
+<meta name="theme-color" content="#E1191C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Клиники Столицы">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="167x167" href="icons/apple-touch-icon-167.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icons/apple-touch-icon-152.png">
+<link rel="apple-touch-icon-precomposed" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="login" class="login">
+  <div class="logo">КС</div>
+  <h2>КЛИНИКИ СТОЛИЦЫ</h2>
+  <div class="hint">Введите PIN для входа</div>
+  <div class="dots" id="dots"></div>
+  <div class="pad" id="pad"></div>
+</div>
+
+<div id="app" class="app hidden">
+  <div class="hdr">
+    <div class="brand">
+      <div class="logo">КС</div>
+      <div>
+        <div class="nm">КЛИНИКИ СТОЛИЦЫ</div>
+        <button class="role" id="roleBtn"><span id="roleName">Владелец</span></button>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <button id="addBtn" aria-label="Создать" style="border:none;background:var(--red);color:#fff;width:34px;height:34px;border-radius:50%;font-size:22px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center">＋</button>
+      <button id="logoutBtn" aria-label="Выйти" title="Выйти" style="border:1px solid var(--line,#e5e5e5);background:none;color:var(--muted);cursor:pointer;font-size:12px;font-weight:600;padding:6px 10px;border-radius:14px">Выйти</button>
+    </div>
+  </div>
+  <div class="scroll">
+    <section class="scr" id="s-home"></section>
+    <section class="scr" id="s-day"></section>
+    <section class="scr" id="s-tasks"></section>
+    <section class="scr" id="s-money"></section>
+    <section class="scr" id="s-funnel"></section>
+    <section class="scr" id="s-more"></section>
+    <section class="scr" id="s-journal"></section>
+    <section class="scr" id="s-goals"></section>
+    <section class="scr" id="s-week"></section>
+    <section class="scr" id="s-habits"></section>
+    <section class="scr" id="s-group"></section>
+    <section class="scr" id="s-pvl"></section>
+    <section class="scr" id="s-agg"></section>
+    <section class="scr" id="s-health"></section>
+    <section class="scr" id="s-assist"></section>
+    <section class="scr" id="s-track"></section>
+    <section class="scr" id="s-content"></section>
+  </div>
+  <nav class="nav" id="nav"></nav>
+</div>
+
+<div id="create" class="sheet-bg hidden"></div>
+
+<link rel="stylesheet" href="https://unpkg.com/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" media="print" onload="this.media='all'">
+<script src="api.js"></script>
+<script src="app.js"></script>
+<script>
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>

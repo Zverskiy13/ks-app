@@ -2730,7 +2730,7 @@ def _agg_email_daily():
 # ---------- пуш напоминаний по времени (как у бота, в приложение) ----------
 # ---------- ИИ-ПОМОЩНИК: разбор всех процессов владельца ----------
 def _owner_id():
-    for u in PINS.values():
+    for u in USERS_BY_ID.values():
         if u.get("role") == "owner":
             return u["id"]
     return "ivan"
@@ -3071,13 +3071,15 @@ def _push_reminders_loop():
                             except Exception:
                                 pass
                     gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминания отправлены")
-            _assistant_daily()
-            _evening_push()
-            _daily_notifications()
-            _agg_email_daily()
-            _bot_watchdog()
         except Exception as e:
-            print(f"push reminders: {e}")
+            print(f"push reminders (напоминания): {e}")
+        # каждое задание — в своём try, чтобы сбой одного НЕ блокировал остальные
+        # (раньше падение _assistant_daily не давало запускаться _agg_email_daily)
+        for _job in (_assistant_daily, _evening_push, _daily_notifications, _agg_email_daily, _bot_watchdog):
+            try:
+                _job()
+            except Exception as e:
+                print(f"push loop {_job.__name__}: {e}")
         _time.sleep(60)
 
 

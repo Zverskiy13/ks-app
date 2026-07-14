@@ -264,8 +264,12 @@ def _storage_db(path):
         return False
     if os.environ.get("STORAGE_BACKEND", "github") != "db":
         return False
-    if path.startswith("state/workload/") or path == "state/heartbeat.json":
-        return False                       # живые данные бота — читаем из GitHub, не из KV
+    # Общие с ботом файлы (пишет бот). Пока бот на GitHub (BOT_ON_GITHUB=1, по умолч.) —
+    # читаем их из GitHub «живьём». Когда бот переедет на общий Postgres — выставить
+    # BOT_ON_GITHUB=0, и приложение будет брать их из общего KV.
+    if os.environ.get("BOT_ON_GITHUB", "1") == "1" and (
+            path.startswith("state/workload/") or path == "state/heartbeat.json"):
+        return False
     return True
 
 
@@ -2563,15 +2567,18 @@ def _agg_parse_xls(raw):
     return _agg_parse_grid(_xls_grid(raw, ""))
 
 
-def _agg_fetch_latest_xls():
+def _agg_fetch_candidates(limit=6):
+    """Последние письма от отправителя с вложением .xls/.xlsx — новые первыми.
+       Возвращает (список [(raw, meta)], ошибка|None)."""
     import imaplib
     import email as _email
     user = os.environ.get("MAIL_USER", "")
     pwd = os.environ.get("MAIL_APP_PASSWORD", "")
     if not (user and pwd):
-        return None, {"error": "MAIL_USER / MAIL_APP_PASSWORD не заданы"}
+        return [], "MAIL_USER / MAIL_APP_PASSWORD не заданы"
     sender = os.environ.get("MAIL_FROM", "result@stoclinic.ru")
     host = os.environ.get("MAIL_IMAP", "imap.gmail.com")
+    out = []
     try:
         M = imaplib.IMAP4_SSL(host)
         M.login(user, pwd)
@@ -2580,63 +2587,127 @@ def _agg_fetch_latest_xls():
         ids = dat[0].split()
         if not ids:
             M.logout()
-            return None, {"error": f"письма от {sender} не найдены"}
-        typ, msgdat = M.fetch(ids[-1], "(RFC822)")
-        raw = msgdat[0][1]
-        M.logout()
-        msg = _email.message_from_bytes(raw)
-        # дата данных = дата письма минус сутки (отчёт «за сутки»)
-        dd = None
-        try:
-            tup = _email.utils.parsedate_to_datetime(msg.get("Date"))
-            dd = (tup.date() - dt.timedelta(days=1)).isoformat()
-        except Exception:
-            dd = (dt.date.today() - dt.timedelta(days=1)).isoformat()
-        for part in msg.walk():
-            fn = part.get_filename() or ""
+            return [], f"письма от {sender} не найдены"
+        for mid in reversed(ids[-limit:]):        # новые первыми
+            typ, msgdat = M.fetch(mid, "(RFC822)")
+            msg = _email.message_from_bytes(msgdat[0][1])
             try:
-                import email.header as _eh
-                if fn:
-                    fn = str(_eh.make_header(_eh.decode_header(fn)))
+                tup = _email.utils.parsedate_to_datetime(msg.get("Date"))
+                dd = (tup.date() - dt.timedelta(days=1)).isoformat()
             except Exception:
-                pass
-            if fn.lower().endswith(".xls") or fn.lower().endswith(".xlsx"):
-                payload = part.get_payload(decode=True)
-                if payload:
-                    return payload, {"date": dd, "file": fn, "from": sender}
-        return None, {"error": "вложение .xls не найдено"}
+                dd = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+            for part in msg.walk():
+                fn = part.get_filename() or ""
+                try:
+                    import email.header as _eh
+                    if fn:
+                        fn = str(_eh.make_header(_eh.decode_header(fn)))
+                except Exception:
+                    pass
+                if fn.lower().endswith(".xls") or fn.lower().endswith(".xlsx"):
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        out.append((payload, {"date": dd, "file": fn, "from": sender}))
+                        break
+        M.logout()
     except Exception as e:
-        return None, {"error": "IMAP: " + str(e)[:160]}
+        if not out:
+            return [], "IMAP: " + str(e)[:160]
+    return out, (None if out else "вложение .xls не найдено")
 
 
 def _agg_email_pull():
-    raw, meta = _agg_fetch_latest_xls()
-    if raw is None:
-        return {"ok": False, "error": meta.get("error", "нет данных")}
-    try:
-        rows = _agg_parse_xls(raw)
-    except Exception as e:
-        return {"ok": False, "error": "разбор .xls: " + str(e)[:160]}
-    if not rows or sum(r["revenue"] for r in rows) <= 0:
-        return {"ok": False, "error": "файл разобран, но данных не найдено"}
+    cands, err = _agg_fetch_candidates(int(os.environ.get("AGG_SCAN_EMAILS", "4")))
+    if not cands:
+        return {"ok": False, "error": err or "нет писем с отчётом"}
+    # Берём НОВЕЙШИЙ отчёт, который удалось разобрать (маленькие дни/выходные — норм,
+    # порогов по сумме нет). Скан нескольких писем — на случай, если у самого свежего
+    # письма вложение не читается: тогда берём следующее по свежести.
+    chosen = None
+    for raw, meta in cands:                       # новые первыми
+        try:
+            rows = _agg_parse_xls(raw)
+        except Exception:
+            rows = []
+        rev = sum(r["revenue"] for r in rows) if rows else 0
+        if rows and rev > 0:
+            chosen = (rows, meta, rev)
+            break
+    if not chosen:
+        return {"ok": False, "error": f"не удалось разобрать отчёт из последних {len(cands)} писем"}
+    rows, meta, rev = chosen
     d = meta.get("date") or dt.date.today().isoformat()
     ym = d[:7]
+    cost = sum(r["cost"] for r in rows)
     store, safe = load_store_safe(_agg_path(ym))
     if not safe:
         return {"ok": False, "error": "Чтение месячного свода не удалось — занос отменён во избежание потери данных. Следующая попытка — в очередной запуск агента."}
+    prev = store.get(d) or {}
+    prev_rev = sum(r.get("revenue", 0) for r in prev.get("rows", []))
+    prev_cost = sum(r.get("cost", 0) for r in prev.get("rows", []))
+    base = {"date": d, "rows": len(rows), "revenue": round(rev), "cost": round(cost),
+            "margin": round(rev - cost), "pct": round((rev - cost) / rev * 100, 1) if rev else 0,
+            "file": meta.get("file", ""), "scanned": len(cands)}
+    if prev and abs(prev_rev - rev) < 1 and abs(prev_cost - cost) < 1:
+        return {"ok": True, "unchanged": True, **base}   # данные за эту дату уже есть — не переписываем
     store[d] = {"rows": rows, "source": "email:" + meta.get("from", ""),
                 "ts": dt.datetime.now().isoformat(timespec="minutes")}
     ok = gh_write(_agg_path(ym), json.dumps(store, ensure_ascii=False, indent=2), f"agg email {d}")
-    rev = sum(r["revenue"] for r in rows)
-    cost = sum(r["cost"] for r in rows)
-    return {"ok": ok, "date": d, "rows": len(rows), "revenue": rev, "cost": cost,
-            "margin": rev - cost, "pct": round((rev - cost) / rev * 100, 1) if rev else 0,
-            "file": meta.get("file", "")}
+    return {"ok": ok, **base}
 
 
 @app.get("/api/finance/pull")
 def finance_pull(user=Depends(require_owner)):
     return _agg_email_pull()
+
+
+@app.get("/api/finance/backfill")
+def finance_backfill(user=Depends(require_owner), n: int = 45):
+    """Перепроверка: сканирует последние n писем от отправителя, разбирает КАЖДОЕ
+       и восстанавливает суточные данные по всем найденным датам (пропущенные — добавляет,
+       изменившиеся — обновляет, совпадающие — оставляет). Быстрый способ сверить месяц."""
+    cands, err = _agg_fetch_candidates(max(1, min(int(n), 90)))
+    if not cands:
+        return {"ok": False, "error": err or "нет писем с отчётом"}
+    seen = set()
+    by_month = {}          # ym -> {date: (rows, rev, cost)}
+    for raw, meta in cands:                       # новые первыми — на дату берём новейшее письмо
+        d = meta.get("date")
+        if not d or d in seen:
+            continue
+        try:
+            rows = _agg_parse_xls(raw)
+        except Exception:
+            rows = []
+        rev = sum(r["revenue"] for r in rows) if rows else 0
+        if not rows or rev <= 0:
+            continue
+        seen.add(d)
+        by_month.setdefault(d[:7], {})[d] = (rows, rev, sum(r["cost"] for r in rows))
+    detail, written = [], 0
+    for ym, days in by_month.items():
+        store, safe = load_store_safe(_agg_path(ym))
+        if not safe:
+            detail.append({"month": ym, "status": "чтение не удалось — пропущено"})
+            continue
+        changed = False
+        for d, (rows, rev, cost) in days.items():
+            prev = store.get(d) or {}
+            prev_rev = sum(r.get("revenue", 0) for r in prev.get("rows", []))
+            prev_cost = sum(r.get("cost", 0) for r in prev.get("rows", []))
+            if prev and abs(prev_rev - rev) < 1 and abs(prev_cost - cost) < 1:
+                detail.append({"date": d, "revenue": round(rev), "status": "совпало"})
+                continue
+            store[d] = {"rows": rows, "source": "backfill", "ts": dt.datetime.now().isoformat(timespec="minutes")}
+            changed, written = True, written + 1
+            detail.append({"date": d, "revenue": round(rev), "status": "обновлено" if prev else "добавлено"})
+        if changed:
+            gh_write(_agg_path(ym), json.dumps(store, ensure_ascii=False, indent=2), f"agg backfill {ym}")
+    detail.sort(key=lambda x: x.get("date", ""))
+    return {"ok": True, "scanned": len(cands), "dates_found": len(seen), "written": written, "detail": detail}
+
+
+_agg_attempt = {"ts": 0.0}
 
 
 def _agg_email_daily():
@@ -2645,11 +2716,15 @@ def _agg_email_daily():
     now = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).replace(tzinfo=None)
     if now.hour < 7:
         return
-    mark = f"state/finance/pulled-{now.date().isoformat()}.json"
-    if load_json(mark, None) is not None:
+    # тянем ВЕСЬ ДЕНЬ, не чаще раза в 20 мин: как только приходит свежий отчёт —
+    # он подхватывается сразу, а не ждёт до завтра. Идемпотентно: если данные за дату
+    # уже есть, _agg_email_pull возвращает unchanged и повторно не пишет.
+    if _time.time() - _agg_attempt["ts"] < 1200:
         return
+    _agg_attempt["ts"] = _time.time()
     res = _agg_email_pull()
-    gh_write(mark, json.dumps(res, ensure_ascii=False), "agg: email pulled")
+    if not res.get("ok"):
+        print(f"[{now.strftime('%Y-%m-%d %H:%M')}] agg pull не удался: {res.get('error')}")
 
 
 # ---------- пуш напоминаний по времени (как у бота, в приложение) ----------
@@ -2778,6 +2853,88 @@ def assistant(b: AssistantIn, user=Depends(require_owner)):
     if dg.get("ok"):
         gh_write(cache_path, json.dumps(dg, ensure_ascii=False, indent=2), f"assistant digest {today_iso}")
     return dg
+
+
+# ================= КОНТЕНТ-СИСТЕМА v1: агент «Аналитик вирусности» =================
+_CONTENT_IDEAS = "state/content/ideas.json"
+
+
+class ContentIn(BaseModel):
+    url: str = ""
+    text: str = ""
+    note: str = ""
+
+
+def _content_prompt(src):
+    return (
+        "Ты — аналитик вирусного видео-контента для группы МЕДИЦИНСКИХ клиник «Клиники Столицы» "
+        "(клиники, лаборатории, профосмотры, медкнижки, охрана труда, корпоративная медицина, HR, wellness). "
+        "Разбери присланный ролик/пост конкурента или смежной ниши и верни СТРОГО JSON без markdown:\n"
+        '{"theme":"тема одной фразой",'
+        '"hook":"приём захвата внимания в первые 3 секунды",'
+        '"structure":"сценарная структура, 1-2 предложения",'
+        '"visual":"ключевой визуальный приём",'
+        '"cta":"призыв к действию в оригинале",'
+        '"emotion":"базовая эмоция",'
+        '"why_viral":"почему зашло, 1-2 предложения",'
+        '"applicability":[{"direction":"Клиника|Профосмотры|Медкнижки|B2B|HR/охрана труда","idea":"как перенести МЕХАНИКУ (не копию) на это направление"}],'
+        '"compliance":{"art24_ok":true,"flags":["нарушения ст.24 ФЗ О рекламе, если есть: гарантия результата, обещание излечения, запугивание здорового, обращение к несовершеннолетним, недостоверные медутверждения"],'
+        '"needs_erid":false,"needs_erid_reason":"почему это реклама и нужна маркировка, либо почему это органика",'
+        '"disclaimer":"Имеются противопоказания, необходима консультация специалиста",'
+        '"verdict":"можно адаптировать|адаптировать с правками|не подходит бренду"}}\n'
+        "Правила: переносим МЕХАНИКУ, не копируем. Для медицины консервативно — любая гарантия/«излечение»/запугивание => art24_ok:false. "
+        "Рекламный характер (продвижение конкретной платной услуги) => needs_erid:true; инфо-образовательный контент в своём сообществе обычно органика => needs_erid:false. "
+        "Коротко, по-русски.\n\nИСТОЧНИК (ссылка и/или описание ролика):\n" + src)
+
+
+@app.post("/api/content/analyze")
+def content_analyze(b: ContentIn, user=Depends(require_owner)):
+    src = "\n".join(x for x in [b.url.strip(), b.note.strip(), b.text.strip()] if x)
+    if not src:
+        return {"ok": False, "error": "Дайте ссылку или описание ролика"}
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1600,
+            "messages": [{"role": "user", "content": _content_prompt(src)}]}
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages",
+                          headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                          json=body, timeout=90)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"claude {r.status_code}"}
+        raw = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+        card = json.loads(raw.replace("```json", "").replace("```", "").strip())
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:140]}
+    card["id"] = dt.datetime.now().strftime("%Y%m%d%H%M%S")
+    card["created"] = dt.datetime.now(dt.timezone(dt.timedelta(hours=3))).isoformat(timespec="minutes")
+    card["source"] = {"url": b.url.strip(), "note": b.note.strip()}
+    card["status"] = "new"
+    lst = load_json(_CONTENT_IDEAS, [])
+    if not isinstance(lst, list):
+        lst = []
+    lst.insert(0, card)
+    gh_write(_CONTENT_IDEAS, json.dumps(lst[:200], ensure_ascii=False, indent=2), "content: idea")
+    return {"ok": True, "card": card}
+
+
+@app.get("/api/content/ideas")
+def content_ideas(user=Depends(require_owner)):
+    lst = load_json(_CONTENT_IDEAS, [])
+    return {"ok": True, "ideas": lst if isinstance(lst, list) else []}
+
+
+class ContentDel(BaseModel):
+    id: str
+
+
+@app.post("/api/content/idea/delete")
+def content_idea_delete(b: ContentDel, user=Depends(require_owner)):
+    lst = load_json(_CONTENT_IDEAS, [])
+    lst = [c for c in lst if c.get("id") != b.id] if isinstance(lst, list) else []
+    ok = gh_write(_CONTENT_IDEAS, json.dumps(lst, ensure_ascii=False, indent=2), "content: del")
+    return {"ok": ok}
 
 
 def _assistant_daily():

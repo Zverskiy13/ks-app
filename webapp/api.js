@@ -41,6 +41,7 @@ const API = {
   pvlReport(profile, days) { return _g(`pvl/report?days=${days || 7}`); },
   finAgg(profile, ym, mode, date) { return _g(`finance/agg?ym=${ym || ""}&mode=${mode || "month"}&date=${date || ""}`); },
   aggFixedSet(amount, ym, scope) { return this._post("finance/fixed", { amount, ym: ym || "", scope: scope || "default" }); },
+  financeBackfill() { return _g("finance/backfill"); },
   healthFileGet(id) { return _g(`health/file?id=${encodeURIComponent(id)}`); },
   auditLogins(ym) { return _g(`audit/logins?ym=${ym || ""}`); },
   dbStatus() { return _g("db/status"); },
@@ -81,5 +82,9 @@ const API = {
   dedup() { return this._post("tasks/dedup", {}); },
   pushSubscribe(sub) { return this._post("push/subscribe", { subscription: sub }); },
   pushTest() { return this._post("push/test", {}); },
-  notifSave(settings) { return this._post("notif/settings", { settings }); }
+  notifSave(settings) { return this._post("notif/settings", { settings }); },
+
+  contentAnalyze(url, note, text) { return this._post("content/analyze", { url: url || "", note: note || "", text: text || "" }); },
+  contentIdeas() { return _g("content/ideas"); },
+  contentDel(id) { return this._post("content/idea/delete", { id }); }
 };

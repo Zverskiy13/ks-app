@@ -281,6 +281,7 @@ const RENDER = {
         <div class="li" onclick="show('goals')"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         <div class="li" onclick="show('week')"><i class="ti ti-calendar-week" style="font-size:20px;color:var(--red)"></i><div class="t">План недели</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
         ${admin ? `<div class="li" onclick="show('assist')"><i class="ti ti-sparkles" style="font-size:20px;color:var(--red)"></i><div class="t">ИИ-помощник</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
+        ${admin ? `<div class="li" onclick="show('content')"><i class="ti ti-movie" style="font-size:20px;color:var(--red)"></i><div class="t">Контент · ИИ-редакция</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         ${admin ? `<div class="li" onclick="show('track')"><i class="ti ti-trophy" style="font-size:20px;color:var(--red)"></i><div class="t">Трекер привычек</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         ${admin ? `<div class="li" onclick="show('health')"><i class="ti ti-heartbeat" style="font-size:20px;color:var(--red)"></i><div class="t">Здоровье</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
         <div class="li"><i class="ti ti-logout" style="font-size:20px;color:var(--muted)"></i><div class="t" onclick="logout()">Выйти</div></div>
@@ -504,6 +505,68 @@ async function addJournal() {
 /* ---- общие хелперы ---- */
 function esc(s) { return (s == null ? "" : String(s)).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 const TODAY_ISO = () => new Date().toISOString().slice(0, 10);
+
+/* ---- Контент · ИИ-редакция (v1: агент «Аналитик») ---- */
+RENDER.content = async function () {
+  const back = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div>`;
+  el("s-content").innerHTML = `${back}<h1 class="h">Контент · ИИ-редакция</h1>
+    <div class="card">
+      <div class="lbl" style="margin-bottom:8px">Вставь ссылку на ролик конкурента и/или короткое описание — аналитик разберёт вирусность, предложит перенос механики на ваши направления и проверит по ст.24.</div>
+      <input id="cnt-url" placeholder="Ссылка на ролик (VK / OK / др.)" style="width:100%;margin-bottom:8px">
+      <textarea id="cnt-note" placeholder="Описание: о чём ролик, что цепляет (по желанию)" style="width:100%;min-height:70px;margin-bottom:8px"></textarea>
+      <button class="btn red" onclick="cntAnalyze()">Анализировать</button>
+    </div>
+    <div id="cnt-list"><div class="lbl" style="padding:8px 2px">Загружаю идеи…</div></div>`;
+  cntLoadList();
+};
+
+async function cntLoadList() {
+  const r = await API.contentIdeas().catch(() => ({}));
+  const ideas = (r && r.ideas) || [];
+  const box = el("cnt-list"); if (!box) return;
+  box.innerHTML = ideas.length ? ideas.map(cntCard).join("")
+    : `<div class="lbl" style="padding:8px 2px">Пока пусто. Разбери первый ролик выше ↑</div>`;
+}
+
+function cntCard(c) {
+  const cm = c.compliance || {};
+  const ok = cm.art24_ok !== false;
+  const badge = ok
+    ? `<span style="color:#1a9e5f;font-weight:600">✓ ст.24 ок</span>`
+    : `<span style="color:var(--red);font-weight:600">⚠ ст.24: ${esc((cm.flags || []).join("; "))}</span>`;
+  const erid = cm.needs_erid
+    ? `<span style="color:#c47f00"> · реклама → нужен erid</span>`
+    : `<span style="color:#888"> · органика</span>`;
+  const app = (c.applicability || []).map(a => `<div style="margin:2px 0">• <b>${esc(a.direction)}:</b> ${esc(a.idea)}</div>`).join("");
+  const src = c.source && c.source.url ? ` · <a href="${esc(c.source.url)}" target="_blank" rel="noopener">источник</a>` : "";
+  return `<div class="card">
+    <div style="font-weight:700;margin-bottom:2px">${esc(c.theme || "—")}</div>
+    <div class="lbl" style="margin-bottom:6px">${badge}${erid} · ${esc(c.verdict || "")}</div>
+    <div style="font-size:14px"><b>Хук:</b> ${esc(c.hook || "")}</div>
+    <div style="font-size:14px"><b>Структура:</b> ${esc(c.structure || "")}</div>
+    ${c.why_viral ? `<div style="font-size:14px"><b>Почему зашло:</b> ${esc(c.why_viral)}</div>` : ""}
+    ${app ? `<div style="font-size:14px;margin-top:6px"><b>Перенос на направления:</b>${app}</div>` : ""}
+    ${!ok ? `<div class="lbl" style="margin-top:6px;color:var(--red)">Дисклеймер: ${esc(cm.disclaimer || "Имеются противопоказания, необходима консультация специалиста")}</div>` : ""}
+    <div class="lbl" style="margin-top:6px">${esc(c.created || "")}${src}</div>
+    <div class="link" style="margin-top:6px;color:var(--red);cursor:pointer" onclick="cntDel('${esc(c.id)}')">Удалить</div>
+  </div>`;
+}
+
+async function cntAnalyze() {
+  const url = (el("cnt-url").value || "").trim();
+  const note = (el("cnt-note").value || "").trim();
+  if (!url && !note) { toast("Дай ссылку или описание"); return; }
+  toast("Анализирую… (10–20 сек)");
+  const r = await API.contentAnalyze(url, note, "").catch(() => ({}));
+  if (!r || r.ok === false) { toast((r && r.error) || "Не удалось"); return; }
+  el("cnt-url").value = ""; el("cnt-note").value = "";
+  toast("Готово ✓"); cntLoadList();
+}
+
+async function cntDel(id) {
+  const r = await API.contentDel(id).catch(() => ({}));
+  toast(r && r.ok !== false ? "Удалено ✓" : "Не удалось"); cntLoadList();
+}
 function dateLabelToday() {
   const d = new Date();
   const wd = ["Воскресенье","Понедельник","Вторник","Среда","Четверг","Пятница","Суббота"];
@@ -926,8 +989,16 @@ RENDER.agg = async function () {
       return `<div class="sec-title">${esc(reg)} · маржа <span style="color:${margColor(pp)}">${pp}%</span></div><div class="card" style="padding:6px 16px">${list.map((x) => `<div class="li"><div class="t"><div style="font-weight:600">${esc(x.clinic)}</div><div class="m">выручка ${fmt(x.revenue)} · себест. ${fmt(x.cost)}</div></div><div style="text-align:right"><div style="font-weight:700">${fmt(x.margin)}</div><div class="m" style="color:${margColor(x.pct)}">${x.pct}%</div></div></div>`).join("")}</div>`;
     }).join("");
   }
-  el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1>${seg}${nav}${dayChips}${totCard}${beCard}${body}<div class="lbl" style="padding:10px 2px 20px">Данные заносит агент из ежедневного отчёта на почте. Маржа = выручка − себестоимость. Постоянные расходы вычитаются только для «пути к прибыли» — сама маржа остаётся валовой.</div>`;
+  el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1>${seg}${nav}${dayChips}${totCard}${beCard}${body}<div class="card"><button class="btn ghost" onclick="aggBackfill()">🔄 Перепроверить месяц</button><div class="lbl" style="margin-top:6px">Пересканирует письма с отчётами и восстановит цифры по всем дням (пропущенные добавит, изменённые обновит).</div></div><div class="lbl" style="padding:10px 2px 20px">Данные заносит агент из ежедневного отчёта на почте. Маржа = выручка − себестоимость. Постоянные расходы вычитаются только для «пути к прибыли» — сама маржа остаётся валовой.</div>`;
 };
+async function aggBackfill() {
+  toast("Перепроверяю письма… это до минуты");
+  const r = await API.financeBackfill().catch(() => ({}));
+  if (!r || r.ok === false) { toast((r && r.error) || "Не удалось"); return; }
+  const changed = (r.detail || []).filter((x) => x.status === "добавлено" || x.status === "обновлено");
+  toast(`Проверено дат: ${r.dates_found}. Обновлено: ${r.written}`);
+  RENDER.agg();
+}
 function aggSetFixed() {
   const cur = (window.__aggBE && window.__aggBE.fixed) || "";
   const v = prompt("Месячные постоянные расходы, ₽ (аренда, ЗП, налоги и пр.):", cur || "");

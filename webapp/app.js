@@ -142,7 +142,7 @@ const RENDER = {
       </div>
       <div class="row spread"><div class="sec-title">Сегодня по часам</div></div>
       <div class="card" style="padding:4px 16px">
-        ${agenda.length ? agenda.map((a, i) => `<div class="li"><span class="chk" onclick="agendaDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${a.time}</span><span class="t" style="font-weight:500">${esc(a.text)}</span></div>`).join("") : `<div class="lbl" style="padding:12px 0">На сегодня по часам пусто</div>`}
+        ${agenda.length ? agenda.map((a, i) => `<div class="li"><span class="chk" onclick="agendaDone(${i})" title="Выполнено"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${a.time}</span><span class="t" style="font-weight:500">${esc(a.text)}</span></div>`).join("") : `<div class="lbl" style="padding:12px 0">На сегодня по часам пусто</div>`}
       </div>
       ${dls.length ? `<div class="sec-title">Горящие дедлайны</div>
       <div class="card" style="padding:4px 16px">${dls.slice(0, 6).map((d) => `<div class="li" style="cursor:pointer" onclick="openDeadline(${d.i})"><span class="tcell" style="color:${d.days != null && d.days <= 7 ? "var(--red)" : d.days != null && d.days <= 21 ? "var(--amber)" : "var(--muted)"}">${d.days == null ? "—" : d.days + "д"}</span><span class="t" style="font-weight:500">${esc(d.text)}<div class="m">${d.date || ""} · нажми, чтобы изменить</div></span><i class="ti ti-pencil" style="color:#ccc"></i></div>`).join("")}</div>` : ""}
@@ -169,24 +169,25 @@ const RENDER = {
       let numSty = "", dotSty = "";
       if (past && st === "done") { numSty = "color:#1F9D55!important;font-weight:800"; dotSty = "background:#1F9D55!important"; }
       else if (past && st === "pending") { numSty = "color:#C0392B!important;font-weight:800"; dotSty = "background:#C0392B!important"; }
+      if (iso === curDay) { numSty = "color:#fff!important;font-weight:800"; dotSty = "background:#fff!important"; }  // выбранный день — красный фон, белые цифры
       cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')"><span style="${numSty}">${d}</span>${marks.has(iso) ? `<span class="cal-dot" style="${dotSty}"></span>` : ''}</button>`;
     }
     el("s-day").innerHTML = `
       <div class="row spread" style="margin:8px 0 10px">
-        <button class="mbtn" onclick="shiftMonth(-1)" aria-label="Пред. месяц"><i class="ti ti-chevron-left"></i></button>
+        <button class="mbtn" onclick="shiftMonth(-1)" aria-label="Пред. месяц" style="font-size:22px;line-height:1">‹</button>
         <div style="font-size:17px;font-weight:700">${MONTHS[M - 1]} ${Y}</div>
-        <button class="mbtn" onclick="shiftMonth(1)" aria-label="След. месяц"><i class="ti ti-chevron-right"></i></button>
+        <button class="mbtn" onclick="shiftMonth(1)" aria-label="След. месяц" style="font-size:22px;line-height:1">›</button>
       </div>
       <div class="cal-h">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map((w) => `<div>${w}</div>`).join("")}</div>
       <div class="cal">${cells}</div>
       <div class="lbl" style="padding:6px 2px 0"><span style="color:#1F9D55">■</span> всё сделано &nbsp; <span style="color:#C0392B">■</span> остались невыполненные — нажми на день, чтобы перенести</div>
       <div class="row spread" style="margin:16px 0 8px"><div style="font-weight:600">${dayLabel(curDay)}</div><button onclick="openCreate({type:'block', date: curDay})" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ в сетку</button></div>
       <div class="card" style="padding:6px 16px">
-        ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}${it.recurring ? ` <span class="lbl" style="color:var(--red)" title="Повтор">🔁 ${esc(it.repeat_label || '')}</span>` : ""}</span><i class="ti ti-pencil" style="color:#ccc;cursor:pointer" onclick="editItem(${i})"></i></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
+        ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}${it.recurring ? ` <span class="lbl" style="color:var(--red)" title="Повтор">🔁 ${esc(it.repeat_label || '')}</span>` : ""}</span><span style="color:#bbb;cursor:pointer;font-size:15px" onclick="editItem(${i})">✎</span></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
       ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}
       ${dd.done && dd.done.length ? `<div class="sec-title" style="margin-top:10px">✓ Выполнено в этот день (${dd.done.length})</div>
-      <div class="card" style="padding:4px 16px">${dd.done.map((it, i) => `<div class="li"><span class="chk done"><i class="ti ti-check" style="font-size:15px"></i></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}${it.recurring ? " 🔁" : ""}</span><button onclick="itemUndone(${i})" title="Вернуть в работу" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-rotate-clockwise"></i></button></div>`).join("")}</div>
+      <div class="card" style="padding:4px 16px">${dd.done.map((it, i) => `<div class="li"><span class="chk done"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}${it.recurring ? " 🔁" : ""}</span><button onclick="itemUndone(${i})" title="Вернуть в работу" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 10px;color:var(--red);cursor:pointer;font-size:15px">↩</button></div>`).join("")}</div>
       <div class="lbl" style="padding:4px 4px 0">↩ вернуть в работу — снять отметку и снова редактировать</div>` : ""}`;
   },
 
@@ -204,12 +205,12 @@ const RENDER = {
       const list = tasks.filter((t) => filter === "done" ? t.done : !t.done && (filter === "all" ? true : within(t.due)));
       el("tasklist").innerHTML = list.length ? list.map((t) => t.done ? `
         <div class="li">
-          <span class="chk done"><i class="ti ti-check" style="font-size:15px"></i></span>
+          <span class="chk done"><span style="font-size:14px;font-weight:800">✓</span></span>
           <div class="t"><div class="done-txt">${esc(t.text)}</div></div>
           <button onclick="reopenTask('${t.id}')" title="Повторить на дату" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-rotate-clockwise"></i></button>
         </div>` : `
         <div class="li">
-          <span class="chk" onclick="closeTask('${t.id}')"><i class="ti ti-check" style="font-size:15px"></i></span>
+          <span class="chk" onclick="closeTask('${t.id}')"><span style="font-size:14px;font-weight:800">✓</span></span>
           <div class="t" onclick="editTask('${t.id}')" style="cursor:pointer"><div>${esc(t.text)}</div><div class="m">${esc(t.company)}${t.due ? " · ⏰ " + fmtDue(t.due) : ""} · нажми, чтобы изменить</div></div>
         </div>`).join("") : `<div class="lbl" style="padding:14px 0">${filter === "done" ? "Выполненных пока нет" : filter === "hot" ? "Срочных задач нет 👍" : "Задач нет 🎉"}</div>`;
     };
@@ -1049,7 +1050,7 @@ RENDER.habits = async function () {
     <h1 class="h">Привычки и шаги</h1>
     <div class="card" style="padding:6px 16px">${(h.habits || []).map((x, i) => `
       <div class="li">
-        <span class="chk ${x.done_today ? "done" : ""}" onclick="markHabit(${i})" title="Отметить сегодня"><i class="ti ti-check" style="font-size:15px"></i></span>
+        <span class="chk ${x.done_today ? "done" : ""}" onclick="markHabit(${i})" title="Отметить сегодня"><span style="font-size:14px;font-weight:800">✓</span></span>
         <div class="t"><div style="font-weight:600">${esc(x.name)} <span class="lbl" style="font-weight:400">· серия ${x.streak} дн</span></div>
         <div class="m">${esc(x.goal || "")}${x.anchor ? " · " + esc(x.anchor) : ""}</div>
         <div style="font-size:15px;letter-spacing:2px;margin-top:3px;color:var(--red)">${x.chain.map((c) => c ? "▰" : "▱").join("")} <span class="lbl" style="font-size:11px;color:var(--muted)">${x.week}/7</span></div></div>

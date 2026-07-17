@@ -52,7 +52,7 @@ function submitPin() {
 }
 async function tryLogin() {
   const res = await API.login(pin);
-  if (res.ok) { profile = res.profile; pin = ""; enterApp(); }
+  if (res.ok) { profile = res.profile; if (window.OFFLINE) OFFLINE.setProfile(profile); pin = ""; enterApp(); }
   else { pin = ""; drawDots(); el("dots").animate([{transform:"translateX(-6px)"},{transform:"translateX(6px)"},{transform:"translateX(0)"}],{duration:200}); }
 }
 
@@ -165,12 +165,15 @@ const RENDER = {
     for (let i = 0; i < startW; i++) cells += "<div></div>";
     for (let d = 1; d <= dim; d++) {
       const iso = `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      const st = status[iso], past = iso < today;
-      let numSty = "", dotSty = "";
-      if (past && st === "done") { numSty = "color:#1F9D55!important;font-weight:800"; dotSty = "background:#1F9D55!important"; }
-      else if (past && st === "pending") { numSty = "color:#C0392B!important;font-weight:800"; dotSty = "background:#C0392B!important"; }
-      if (iso === curDay) { numSty = "color:#fff!important;font-weight:800"; dotSty = "background:#fff!important"; }  // выбранный день — красный фон, белые цифры
-      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')"><span style="${numSty}">${d}</span>${marks.has(iso) ? `<span class="cal-dot" style="${dotSty}"></span>` : ''}</button>`;
+      const st = status[iso], notFuture = iso <= today;   // сегодня тоже подсвечиваем
+      let numSty = "", dotSty = "", btnSty = "";
+      if (notFuture && st === "done") { numSty = "color:#1F9D55!important;font-weight:800"; dotSty = "background:#1F9D55!important"; }
+      else if (notFuture && st === "pending") { numSty = "color:#C0392B!important;font-weight:800"; dotSty = "background:#C0392B!important"; }
+      if (iso === curDay) {
+        numSty = "color:#fff!important;font-weight:800"; dotSty = "background:#fff!important";
+        btnSty = "background:" + (st === "done" ? "#1F9D55" : "#C0392B") + "!important";   // выбранный день: зелёный если всё сделано, иначе красный
+      }
+      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" style="${btnSty}" onclick="pickDay('${iso}')"><span style="${numSty}">${d}</span>${marks.has(iso) ? `<span class="cal-dot" style="${dotSty}"></span>` : ''}</button>`;
     }
     el("s-day").innerHTML = `
       <div class="row spread" style="margin:8px 0 10px">
@@ -189,6 +192,7 @@ const RENDER = {
       ${dd.done && dd.done.length ? `<div class="sec-title" style="margin-top:10px">✓ Выполнено в этот день (${dd.done.length})</div>
       <div class="card" style="padding:4px 16px">${dd.done.map((it, i) => `<div class="li"><span class="chk done"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}${it.recurring ? " 🔁" : ""}</span><button onclick="itemUndone(${i})" title="Вернуть в работу" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 10px;color:var(--red);cursor:pointer;font-size:15px">↩</button></div>`).join("")}</div>
       <div class="lbl" style="padding:4px 4px 0">↩ вернуть в работу — снять отметку и снова редактировать</div>` : ""}`;
+    if (window.updateOfflineBanner) updateOfflineBanner();
   },
 
   async tasks() {
@@ -386,9 +390,46 @@ async function saveCreate() {
 function logout() { try { API.logout(); } catch (e) {} profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
 /* сессия истекла (сервер вернул 401) → на экран входа */
 function onAuthExpired() { if (!profile) return; profile = null; try { el("app").classList.add("hidden"); el("login").classList.remove("hidden"); toast("Сессия истекла — войдите заново"); } catch (e) {} }
-/* авто-вход по действующей cookie-сессии */
-async function bootAuth() { try { const r = await API.authMe(); if (r && r.ok && r.profile) { profile = r.profile; enterApp(); } } catch (e) {} }
+/* авто-вход по действующей cookie-сессии; офлайн — по кэшу профиля */
+async function bootAuth() {
+  try {
+    const r = await API.authMe();
+    if (r && r.ok && r.profile) { profile = r.profile; if (window.OFFLINE) OFFLINE.setProfile(profile); enterApp(); return; }
+  } catch (e) {}
+  // нет сети, но раньше уже входили — пускаем по сохранённому профилю (офлайн-режим)
+  if (!navigator.onLine && window.OFFLINE) {
+    const p = OFFLINE.getProfile();
+    if (p) { profile = p; enterApp(); }
+  }
+}
 bootAuth();
+
+/* ---------- офлайн-синхронизация и индикатор ---------- */
+function updateOfflineBanner() {
+  const b = el("offbar"); if (!b) return;
+  const pend = window.OFFLINE ? OFFLINE.pending() : 0;
+  if (!navigator.onLine) {
+    b.style.display = "block"; b.style.background = "#8a6d0f";
+    b.textContent = "● Офлайн — работаю без сети" + (pend ? ` · изменений в очереди: ${pend}` : "");
+  } else if (pend) {
+    b.style.display = "block"; b.style.background = "#1F6FEB";
+    b.textContent = `Синхронизирую… осталось: ${pend}`;
+  } else { b.style.display = "none"; }
+}
+function syncNow() {
+  if (!window.OFFLINE) return;
+  updateOfflineBanner();
+  OFFLINE.flush().then(() => {
+    updateOfflineBanner();
+    const dayScr = el("s-day");
+    if (profile && dayScr && dayScr.classList.contains("on") && RENDER.day) RENDER.day();
+  }).catch(() => {});
+}
+window.addEventListener("online", syncNow);
+window.addEventListener("offline", updateOfflineBanner);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNow(); });
+setInterval(updateOfflineBanner, 4000);
+setTimeout(syncNow, 1500);
 
 function reopenTask(id) {
   const t = (window.__tasks || []).find((x) => x.id === id);

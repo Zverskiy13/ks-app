@@ -52,7 +52,7 @@ function submitPin() {
 }
 async function tryLogin() {
   const res = await API.login(pin);
-  if (res.ok) { profile = res.profile; pin = ""; enterApp(); }
+  if (res.ok) { profile = res.profile; if (window.OFFLINE) OFFLINE.setProfile(profile); pin = ""; enterApp(); }
   else { pin = ""; drawDots(); el("dots").animate([{transform:"translateX(-6px)"},{transform:"translateX(6px)"},{transform:"translateX(0)"}],{duration:200}); }
 }
 
@@ -127,8 +127,8 @@ const RENDER = {
         <div class="pulse-card ${hotDls ? "hot" : ""}"><div class="k">Дедлайны</div><div class="n">${hotDls}</div><div class="m">до 14 дней</div></div>
       </div>
       ${dashboardCard()}
-      <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
-      <div class="card" onclick="show('agg')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
+      <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
+      <div class="card" onclick="show('agg')" style="cursor:pointer;margin-top:4px"><div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
       ${hsHomeCard()}
       ${tkHomeCard()}` : ""}
       ${top ? `<div class="hero">
@@ -165,12 +165,15 @@ const RENDER = {
     for (let i = 0; i < startW; i++) cells += "<div></div>";
     for (let d = 1; d <= dim; d++) {
       const iso = `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      const st = status[iso], past = iso < today;
-      let numSty = "", dotSty = "";
-      if (past && st === "done") { numSty = "color:#1F9D55!important;font-weight:800"; dotSty = "background:#1F9D55!important"; }
-      else if (past && st === "pending") { numSty = "color:#C0392B!important;font-weight:800"; dotSty = "background:#C0392B!important"; }
-      if (iso === curDay) { numSty = "color:#fff!important;font-weight:800"; dotSty = "background:#fff!important"; }  // выбранный день — красный фон, белые цифры
-      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" onclick="pickDay('${iso}')"><span style="${numSty}">${d}</span>${marks.has(iso) ? `<span class="cal-dot" style="${dotSty}"></span>` : ''}</button>`;
+      const st = status[iso], notFuture = iso <= today;   // сегодня тоже подсвечиваем
+      let numSty = "", dotSty = "", btnSty = "";
+      if (notFuture && st === "done") { numSty = "color:#1F9D55!important;font-weight:800"; dotSty = "background:#1F9D55!important"; }
+      else if (notFuture && st === "pending") { numSty = "color:#C0392B!important;font-weight:800"; dotSty = "background:#C0392B!important"; }
+      if (iso === curDay) {
+        numSty = "color:#fff!important;font-weight:800"; dotSty = "background:#fff!important";
+        btnSty = "background:" + (st === "done" ? "#1F9D55" : "#C0392B") + "!important";   // выбранный день: зелёный если всё сделано, иначе красный
+      }
+      cells += `<button class="cal-d${iso === curDay ? " sel" : ""}${iso === today ? " tod" : ""}" style="${btnSty}" onclick="pickDay('${iso}')"><span style="${numSty}">${d}</span>${marks.has(iso) ? `<span class="cal-dot" style="${dotSty}"></span>` : ''}</button>`;
     }
     el("s-day").innerHTML = `
       <div class="row spread" style="margin:8px 0 10px">
@@ -189,6 +192,7 @@ const RENDER = {
       ${dd.done && dd.done.length ? `<div class="sec-title" style="margin-top:10px">✓ Выполнено в этот день (${dd.done.length})</div>
       <div class="card" style="padding:4px 16px">${dd.done.map((it, i) => `<div class="li"><span class="chk done"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}${it.recurring ? " 🔁" : ""}</span><button onclick="itemUndone(${i})" title="Вернуть в работу" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 10px;color:var(--red);cursor:pointer;font-size:15px">↩</button></div>`).join("")}</div>
       <div class="lbl" style="padding:4px 4px 0">↩ вернуть в работу — снять отметку и снова редактировать</div>` : ""}`;
+    if (window.updateOfflineBanner) updateOfflineBanner();
   },
 
   async tasks() {
@@ -224,23 +228,40 @@ const RENDER = {
   async money() {
     const f = await API.finance(profile);
     if (f.scope === "group") {
-      const d = f.data, pct = Math.min(100, Math.round(d.ownerIncome / d.goal * 100));
+      // помесячные финансы: доход владельца, путь к 5 млн, история и переключение месяцев
+      const d = await API.group(profile, moneyYM).catch(() => ({ rows: [], total: 0, owner_income: 0, months: [], trend: [], ym: moneyYM, goal: 5000000 }));
+      moneyYM = d.ym || moneyYM;
+      window.__group = d;
+      const nf = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n || 0));
+      const MM = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
+      const ymL = (ym) => ym ? MM[parseInt(ym.slice(5, 7)) - 1] + " " + ym.slice(0, 4) : "";
+      const dlt = (p, prev) => (typeof p === "number" && typeof prev === "number") ? `<span style="color:${p - prev >= 0 ? "#15A06D" : "#C0392B"};font-size:11.5px;font-weight:700">${p - prev >= 0 ? "▲" : "▼"} ${nf(Math.abs(p - prev))}</span>` : "";
+      const goal = d.goal || 5000000;
+      const pct = Math.min(100, Math.round((d.owner_income || 0) / goal * 100));
+      const levers = (f.data && f.data.levers) || [];
       el("s-money").innerHTML = `
         <h1 class="h">Финансы</h1>
-        <div class="card"><div class="lbl">Твой доход (доля)</div>
-          <div class="big">${fmt(d.ownerIncome)}</div>
+        <div class="row spread" style="margin:2px 0 12px">
+          <button class="mbtn" onclick="moneyShift(-1)" aria-label="Пред. месяц" style="font-size:22px;line-height:1">‹</button>
+          <div style="font-size:17px;font-weight:800">${ymL(d.ym)}</div>
+          <button class="mbtn" onclick="moneyShift(1)" aria-label="След. месяц" style="font-size:22px;line-height:1">›</button>
+        </div>
+        <div class="card"><div class="lbl">Твой доход за месяц (с учётом долей)</div>
+          <div class="big">${nf(d.owner_income)} ₽</div>
           <div class="bar"><span style="width:${pct}%"></span></div>
-          <div class="row spread"><span class="lbl">цель ${fmt(d.goal)} · ${pct}%</span><span class="lbl" style="font-weight:600;color:var(--ink)">ещё ${fmt(d.goal - d.ownerIncome)}</span></div>
+          <div class="row spread"><span class="lbl">цель ${nf(goal)} · ${pct}%</span><span class="lbl" style="font-weight:600;color:var(--ink)">до цели ${nf(Math.max(0, goal - (d.owner_income || 0)))} ₽</span></div>
+          <div class="lbl" style="margin-top:6px">Чистая прибыль группы за месяц: <b style="color:var(--ink)">${nf(d.total)} ₽</b></div>
         </div>
-        <div class="metrics">
-          <div class="metric"><div class="lbl" style="font-size:11px">Долг</div><div class="n">${(d.debt/1e6).toFixed(1)} млн</div></div>
-          ${d.companies.slice(0,2).map((c)=>`<div class="metric"><div class="lbl" style="font-size:11px">${c.name.split("·").pop().trim()}</div><div class="n">${(c.profit/1e6).toFixed(2)} млн</div></div>`).join("")}
-        </div>
-        <div class="card" onclick="show('group')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-building-community" style="color:var(--red);margin-right:8px"></i>Группа компаний — прибыль по месяцам</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
-        <div class="card" onclick="show('pvl')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
-        <div class="card" onclick="show('agg')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div></div>
-        <div class="sec-title">Рычаги к 5 млн</div>
-        <div class="card">${d.levers.map((l)=>`<div style="padding:8px 0"><div class="row spread" style="font-size:13px;font-weight:500"><span>${l.name}</span><span class="lbl">+${Math.round(l.impact/1000)} т</span></div><div class="bar sm"><span style="width:${l.progress}%"></span></div></div>`).join("")}</div>`;
+        <div class="card" style="padding:6px 16px">${(d.rows || []).map((r) => `<div class="li"><div class="t"><div style="font-weight:700">${esc(r.name)}${r.share && r.share !== 1 ? ` <span class="lbl" style="font-weight:400">· доля ${Math.round(r.share * 100)}%</span>` : ""}</div><div class="m">${r.net == null ? "нет данных за месяц" : `доход ${nf(r.income)} − расход ${nf(r.expense)} ${dlt(r.net, r.prev_net)}`}</div></div><div style="font-weight:800">${r.net == null ? "—" : nf(r.net)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Направлений нет</div>'}</div>
+        ${d.agg_total ? `<div class="lbl" style="padding:6px 2px">🧾 Маржа агрегатора за месяц (справочно): <b>${nf(d.agg_total)} ₽</b> — в форме есть кнопка подставить её как доход «Агрегатора».</div>` : ""}
+        <button class="btn red" onclick="openGroupForm()">Внести доход/расход за ${ymL(d.ym)}</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="uploadReport()">📥 Загрузить Excel‑отчёт</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="scanFinance()"><i class="ti ti-camera" style="margin-right:6px"></i>Распознать отчёт фото/PDF</button>
+        ${(d.trend && d.trend.length > 1) ? `<div class="sec-title" style="margin-top:16px">История по месяцам</div><div class="card" style="padding:6px 16px">${d.trend.map((t) => `<div class="li"><span class="t">${ymL(t.ym)}</span><span style="font-weight:700">${nf(t.total)} ₽</span></div>`).join("")}</div>` : ""}
+        ${levers.length ? `<div class="sec-title" style="margin-top:16px">Рычаги к 5 млн</div><div class="card">${levers.map((l)=>`<div style="padding:8px 0"><div class="row spread" style="font-size:13px;font-weight:500"><span>${esc(l.name || "")}</span><span class="lbl">+${Math.round((l.impact||0)/1000)} т</span></div><div class="bar sm"><span style="width:${l.progress||0}%"></span></div></div>`).join("")}</div>` : ""}
+        <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:10px"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
+        <div class="card" onclick="show('agg')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
+        <div class="lbl" style="padding:8px 2px">Прибыль = доход − ВСЕ расходы. Заноси факт по каждому направлению за месяц — доход владельца и путь к 5 млн пересчитываются сами. Переключай месяцы стрелками ‹ ›.</div>`;
     } else if (f.scope === "company") {
       el("s-money").innerHTML = `<h1 class="h">Финансы компании</h1>
         ${f.data.companies.map((c)=>`<div class="card"><div class="lbl">${c.name}</div><div class="big">${fmt(c.profit)}</div><div class="lbl">операционная прибыль / мес</div></div>`).join("")}
@@ -271,20 +292,20 @@ const RENDER = {
       <h1 class="h">Ещё</h1>
       <div class="card" style="padding:6px 16px">
         <div class="li" onclick="enablePush()"><i class="ti ti-bell-ringing" style="font-size:20px;color:var(--red)"></i><div class="t">Уведомления</div><span class="lbl" id="pushState">включить</span></div>
-        <div class="li" onclick="openNotifSettings()"><i class="ti ti-settings" style="font-size:20px;color:var(--red)"></i><div class="t">Настройка уведомлений</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
-        ${admin ? `<div class="li" onclick="openLoginAudit()"><i class="ti ti-shield-lock" style="font-size:20px;color:var(--red)"></i><div class="t">Журнал входов</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        ${admin ? `<div class="li" onclick="openDbStatus()"><i class="ti ti-database" style="font-size:20px;color:var(--red)"></i><div class="t">Состояние БД</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        <div class="li" onclick="show('journal')"><i class="ti ti-notebook" style="font-size:20px;color:var(--red)"></i><div class="t">Дневник / заметки</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
+        <div class="li" onclick="openNotifSettings()"><i class="ti ti-settings" style="font-size:20px;color:var(--red)"></i><div class="t">Настройка уведомлений</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>
+        ${admin ? `<div class="li" onclick="openLoginAudit()"><i class="ti ti-shield-lock" style="font-size:20px;color:var(--red)"></i><div class="t">Журнал входов</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
+        ${admin ? `<div class="li" onclick="openDbStatus()"><i class="ti ti-database" style="font-size:20px;color:var(--red)"></i><div class="t">Состояние БД</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
+        <div class="li" onclick="show('journal')"><i class="ti ti-notebook" style="font-size:20px;color:var(--red)"></i><div class="t">Дневник / заметки</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>
         <div class="li" onclick="testPush()"><i class="ti ti-send" style="font-size:20px;color:var(--red)"></i><div class="t">Прислать тестовый пуш</div></div>
-        ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        ${admin ? `<div class="li"><i class="ti ti-users" style="font-size:20px;color:var(--red)"></i><div class="t">Роли и доступ</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        <div class="li" onclick="show('habits')"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
-        <div class="li" onclick="show('goals')"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
-        <div class="li" onclick="show('week')"><i class="ti ti-calendar-week" style="font-size:20px;color:var(--red)"></i><div class="t">План недели</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>
-        ${admin ? `<div class="li" onclick="show('assist')"><i class="ti ti-sparkles" style="font-size:20px;color:var(--red)"></i><div class="t">ИИ-помощник</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        ${admin ? `<div class="li" onclick="show('content')"><i class="ti ti-movie" style="font-size:20px;color:var(--red)"></i><div class="t">Контент · ИИ-редакция</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        ${admin ? `<div class="li" onclick="show('track')"><i class="ti ti-trophy" style="font-size:20px;color:var(--red)"></i><div class="t">Трекер привычек</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
-        ${admin ? `<div class="li" onclick="show('health')"><i class="ti ti-heartbeat" style="font-size:20px;color:var(--red)"></i><div class="t">Здоровье</div><i class="ti ti-chevron-right" style="color:#bbb"></i></div>` : ""}
+        ${admin ? `<div class="li" onclick="dedupTasks()"><i class="ti ti-eraser" style="font-size:20px;color:var(--red)"></i><div class="t">Почистить дубли задач</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
+        ${admin ? `<div class="li"><i class="ti ti-users" style="font-size:20px;color:var(--red)"></i><div class="t">Роли и доступ</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
+        <div class="li" onclick="show('habits')"><i class="ti ti-flame" style="font-size:20px;color:var(--red)"></i><div class="t">Привычки и шаги</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>
+        <div class="li" onclick="show('goals')"><i class="ti ti-target-arrow" style="font-size:20px;color:var(--red)"></i><div class="t">Цели и прогресс</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>
+        <div class="li" onclick="show('week')"><i class="ti ti-calendar-week" style="font-size:20px;color:var(--red)"></i><div class="t">План недели</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>
+        ${admin ? `<div class="li" onclick="show('assist')"><i class="ti ti-sparkles" style="font-size:20px;color:var(--red)"></i><div class="t">ИИ-помощник</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
+        ${admin ? `<div class="li" onclick="show('content')"><i class="ti ti-movie" style="font-size:20px;color:var(--red)"></i><div class="t">Контент · ИИ-редакция</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
+        ${admin ? `<div class="li" onclick="show('track')"><i class="ti ti-trophy" style="font-size:20px;color:var(--red)"></i><div class="t">Трекер привычек</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
+        ${admin ? `<div class="li" onclick="show('health')"><i class="ti ti-heartbeat" style="font-size:20px;color:var(--red)"></i><div class="t">Здоровье</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div>` : ""}
         <div class="li"><i class="ti ti-logout" style="font-size:20px;color:var(--muted)"></i><div class="t" onclick="logout()">Выйти</div></div>
       </div>
       <div class="card" style="text-align:center"><div class="lbl">${profile.title}</div><div style="font-size:13px;font-weight:600;margin-top:4px">Уровень 6 · «Командир» · 820 XP</div></div>`;
@@ -386,9 +407,46 @@ async function saveCreate() {
 function logout() { try { API.logout(); } catch (e) {} profile = null; el("app").classList.add("hidden"); el("login").classList.remove("hidden"); }
 /* сессия истекла (сервер вернул 401) → на экран входа */
 function onAuthExpired() { if (!profile) return; profile = null; try { el("app").classList.add("hidden"); el("login").classList.remove("hidden"); toast("Сессия истекла — войдите заново"); } catch (e) {} }
-/* авто-вход по действующей cookie-сессии */
-async function bootAuth() { try { const r = await API.authMe(); if (r && r.ok && r.profile) { profile = r.profile; enterApp(); } } catch (e) {} }
+/* авто-вход по действующей cookie-сессии; офлайн — по кэшу профиля */
+async function bootAuth() {
+  try {
+    const r = await API.authMe();
+    if (r && r.ok && r.profile) { profile = r.profile; if (window.OFFLINE) OFFLINE.setProfile(profile); enterApp(); return; }
+  } catch (e) {}
+  // нет сети, но раньше уже входили — пускаем по сохранённому профилю (офлайн-режим)
+  if (!navigator.onLine && window.OFFLINE) {
+    const p = OFFLINE.getProfile();
+    if (p) { profile = p; enterApp(); }
+  }
+}
 bootAuth();
+
+/* ---------- офлайн-синхронизация и индикатор ---------- */
+function updateOfflineBanner() {
+  const b = el("offbar"); if (!b) return;
+  const pend = window.OFFLINE ? OFFLINE.pending() : 0;
+  if (!navigator.onLine) {
+    b.style.display = "block"; b.style.background = "#8a6d0f";
+    b.textContent = "● Офлайн — работаю без сети" + (pend ? ` · изменений в очереди: ${pend}` : "");
+  } else if (pend) {
+    b.style.display = "block"; b.style.background = "#1F6FEB";
+    b.textContent = `Синхронизирую… осталось: ${pend}`;
+  } else { b.style.display = "none"; }
+}
+function syncNow() {
+  if (!window.OFFLINE) return;
+  updateOfflineBanner();
+  OFFLINE.flush().then(() => {
+    updateOfflineBanner();
+    const dayScr = el("s-day");
+    if (profile && dayScr && dayScr.classList.contains("on") && RENDER.day) RENDER.day();
+  }).catch(() => {});
+}
+window.addEventListener("online", syncNow);
+window.addEventListener("offline", updateOfflineBanner);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNow(); });
+setInterval(updateOfflineBanner, 4000);
+setTimeout(syncNow, 1500);
 
 function reopenTask(id) {
   const t = (window.__tasks || []).find((x) => x.id === id);
@@ -680,6 +738,13 @@ async function delBigGoal(id) {
 
 /* ---- группа компаний: прибыль по месяцам ---- */
 let groupYM = "";
+let moneyYM = "";
+function moneyShift(n) {
+  const cur = (window.__group && window.__group.ym) || new Date().toISOString().slice(0, 7);
+  let y = parseInt(cur.slice(0, 4)), m = parseInt(cur.slice(5, 7)) + n;
+  if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; }
+  moneyYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.money();
+}
 RENDER.group = async function () {
   const d = await API.group(profile, groupYM).catch(() => ({ rows: [], total: 0, owner_income: 0, months: [], trend: [], ym: groupYM }));
   groupYM = d.ym || groupYM;
@@ -692,9 +757,9 @@ RENDER.group = async function () {
     <div class="link" onclick="show('money')" style="margin:8px 0;cursor:pointer">‹ Назад</div>
     <h1 class="h">Группа компаний</h1>
     <div class="row spread" style="margin:2px 0 12px">
-      <button class="mbtn" onclick="groupShift(-1)"><i class="ti ti-chevron-left"></i></button>
+      <button class="mbtn" onclick="groupShift(-1)" style="font-size:22px;line-height:1">‹</button>
       <div style="font-size:17px;font-weight:800">${ymLabel(d.ym)}</div>
-      <button class="mbtn" onclick="groupShift(1)"><i class="ti ti-chevron-right"></i></button>
+      <button class="mbtn" onclick="groupShift(1)" style="font-size:22px;line-height:1">›</button>
     </div>
     <div class="card"><div class="lbl">Чистая прибыль группы за месяц</div><div class="big">${nf(d.total)} ₽</div>
       <div class="lbl">Твой доход (с учётом долей): <b style="color:var(--ink)">${nf(d.owner_income)} ₽</b> из цели ${nf(d.goal || 5000000)} · ${d.goal ? Math.min(100, Math.round(d.owner_income / d.goal * 100)) : 0}%</div>
@@ -779,7 +844,9 @@ async function saveGroupForm() {
   });
   toast("Сохраняю…");
   const r = await API.groupSave(d.ym, rows);
-  closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.group();
+  closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось");
+  const _m = el("s-money");
+  if (_m && _m.classList.contains("on") && RENDER.money) { moneyYM = d.ym; RENDER.money(); } else RENDER.group();
 }
 
 /* ---- голос → текст ---- */
@@ -957,7 +1024,7 @@ RENDER.agg = async function () {
   if (!r || r.ok === false) { el("s-agg").innerHTML = `${back}<h1 class="h">Агрегатор · маржа</h1><div class="card"><div class="lbl">${esc((r && r.error) || "Не удалось загрузить")}</div></div>`; return; }
   const rows = r.rows || [], t = r.totals || {}, dates = r.dates || [];
   const seg = `<div class="seg"><b class="${aggMode === "month" ? "on" : ""}" onclick="aggSetMode('month')">Месяц</b><b class="${aggMode === "day" ? "on" : ""}" onclick="aggSetMode('day')">День</b></div>`;
-  const nav = `<div class="row spread" style="margin:8px 0 10px"><button class="mbtn" onclick="aggShift(-1)" aria-label="Пред. месяц"><i class="ti ti-chevron-left"></i></button><div style="font-size:16px;font-weight:700">${aggMonthLabel(aggYM)}</div><button class="mbtn" onclick="aggShift(1)" aria-label="След. месяц"><i class="ti ti-chevron-right"></i></button></div>`;
+  const nav = `<div class="row spread" style="margin:8px 0 10px"><button class="mbtn" onclick="aggShift(-1)" aria-label="Пред. месяц" style="font-size:22px;line-height:1">‹</button><div style="font-size:16px;font-weight:700">${aggMonthLabel(aggYM)}</div><button class="mbtn" onclick="aggShift(1)" aria-label="След. месяц" style="font-size:22px;line-height:1">›</button></div>`;
   let dayChips = "";
   if (aggMode === "day") {
     dayChips = dates.length ? `<div class="lbl" style="padding:2px 2px 8px">Дни: ${dates.map((d) => `<span onclick="aggPick('${d}')" style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;border:1px solid var(--line,#eee);border-radius:10px;cursor:pointer;${d === r.date ? "background:var(--red);color:#fff" : ""}">${d.slice(8, 10)}.${d.slice(5, 7)}</span>`).join("")}</div>` : `<div class="lbl" style="padding:2px 2px 8px">За этот месяц дней пока нет</div>`;
@@ -1736,7 +1803,7 @@ RENDER.track = function () {
   }
   const badTabs = d.bad.map((b) => `<b class="${trackBad === b.id ? "on" : ""}" onclick="tkPickBad('${b.id}')">${esc(b.title)}</b>`).join("");
   const calendar = `<div class="seg">${badTabs}</div>
-    <div class="row spread" style="margin:8px 0"><button class="mbtn" onclick="tkShiftMonth(-1)"><i class="ti ti-chevron-left"></i></button><div style="font-weight:700">${MONTHS[M - 1]} ${Y}</div><button class="mbtn" onclick="tkShiftMonth(1)"><i class="ti ti-chevron-right"></i></button></div>
+    <div class="row spread" style="margin:8px 0"><button class="mbtn" onclick="tkShiftMonth(-1)" style="font-size:22px;line-height:1">‹</button><div style="font-weight:700">${MONTHS[M - 1]} ${Y}</div><button class="mbtn" onclick="tkShiftMonth(1)" style="font-size:22px;line-height:1">›</button></div>
     <div class="cal-h">${["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((w) => `<div>${w}</div>`).join("")}</div>
     <div class="cal" style="gap:4px">${cells}</div>
     <div class="lbl" style="padding:6px 2px"><span style="color:#1F9D55">●</span> чисто · <span style="color:var(--red)">●</span> был срыв · ○ нет отметки</div>`;

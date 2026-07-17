@@ -15,12 +15,24 @@ const API = {
   login(pin) {
     return fetch(`${API_BASE}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ pin }) }).then(r => r.json()).catch(() => ({ ok: false }));
   },
-  authMe() { return fetch(`${API_BASE}/auth/me`, { credentials: "same-origin" }).then(r => r.json()).catch(() => ({ ok: false })); },
+  authMe() {
+    return fetch(`${API_BASE}/auth/me`, { credentials: "same-origin" }).then(r => r.json())
+      .then((res) => { if (res && res.ok && res.profile && window.OFFLINE) OFFLINE.setProfile(res.profile); return res; })
+      .catch(() => ({ ok: false, offline: true }));
+  },
   logout() { return fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "same-origin" }).then(r => r.json()).catch(() => ({})); },
 
   _get(path) { return _g(path); },
   async _post(path, body) {
-    return fetch(`${API_BASE}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(body) }).then(_authJson);
+    try {
+      const r = await fetch(`${API_BASE}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(body) });
+      if (r.status === 401 && typeof onAuthExpired === "function") { try { onAuthExpired(); } catch (e) {} }
+      return await r.json().catch(() => ({ ok: false }));
+    } catch (e) {
+      // нет сети: правки «Дня» кладём в очередь и применяем локально
+      if (window.OFFLINE && OFFLINE.queueable(path)) { OFFLINE.enqueue(path, body); return { ok: true, queued: true }; }
+      return { ok: false, offline: true };
+    }
   },
 
   today() { return _g("today"); },
@@ -35,8 +47,16 @@ const API = {
   bigGoals() { return _g("biggoals"); },
   pvlTeam() { return _g("pvl/team"); },
   journal(limit) { return _g(`journal?limit=${limit || 50}`); },
-  month(ym) { return _g(`month?ym=${encodeURIComponent(ym || "")}`); },
-  day(date) { return _g(`day?date=${encodeURIComponent(date || "")}`); },
+  month(ym) {
+    return _g(`month?ym=${encodeURIComponent(ym || "")}`)
+      .then((d) => { if (d && d.ok !== false && window.OFFLINE) OFFLINE.cacheMonth(ym, d); return d; })
+      .catch(() => (window.OFFLINE && OFFLINE.getMonth(ym)) || { dates: [], status: {} });
+  },
+  day(date) {
+    return _g(`day?date=${encodeURIComponent(date || "")}`)
+      .then((d) => { if (d && d.ok !== false && window.OFFLINE) OFFLINE.cacheDay(date, d); return d; })
+      .catch(() => (window.OFFLINE && OFFLINE.getDay(date)) || { items: [], done: [], free: [], offline: true });
+  },
   group(profile, ym) { return _g(`group?ym=${encodeURIComponent(ym || "")}`); },
   pvlReport(profile, days) { return _g(`pvl/report?days=${days || 7}`); },
   finAgg(profile, ym, mode, date) { return _g(`finance/agg?ym=${ym || ""}&mode=${mode || "month"}&date=${date || ""}`); },

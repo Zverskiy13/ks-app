@@ -19,6 +19,8 @@
 </head>
 <body>
 
+<div id="offbar" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;color:#fff;font:600 13px/1.4 Arial,sans-serif;text-align:center;padding:6px 10px"></div>
+
 <div id="login" class="login">
   <div class="logo">КС</div>
   <h2>КЛИНИКИ СТОЛИЦЫ</h2>
@@ -65,7 +67,8 @@
 
 <div id="create" class="sheet-bg hidden"></div>
 
-<link rel="stylesheet" href="https://unpkg.com/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" media="print" onload="this.media='all'">
+<script src="offline.js"></script>
 <script src="api.js"></script>
 <script src="app.js"></script>
 <script>

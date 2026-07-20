@@ -1882,6 +1882,113 @@ class ReportUpload(BaseModel):
     ym: str = ""              # finance: месяц
 
 
+RU_MONTHS = {"январ": 1, "феврал": 2, "март": 3, "апрел": 4, "мая": 5, "май": 5, "июн": 6,
+             "июл": 7, "август": 8, "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12}
+
+
+def _fin_num(v):
+    """Число из ячейки: '1 022 448,00 ₽' → 1022448.0. None, если не число."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v or "").strip().replace(" ", "").replace(" ", "").replace(",", ".")
+    s = re.sub(r"[^\d.\-]", "", s)
+    if s in ("", "-", ".", "--"):
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def _fin_guess_ym(grid, filename="", fallback=""):
+    """Месяц отчёта из имени файла или шапки: 'пвл июнь' → 2026-06.
+       Числовые ячейки игнорируем, иначе год ловится из сумм (208191.88 → 2081)."""
+    fn = (filename or "").lower()
+    head = []
+    for row in grid[:3]:
+        for c in (row or []):
+            s = str(c or "").strip()
+            if s and _fin_num(s) is None:      # только текстовые ячейки
+                head.append(s.lower())
+    hay = fn + " " + " ".join(head)
+    mon = None
+    for k, v in RU_MONTHS.items():
+        if k in hay:
+            mon = v
+            break
+    if not mon:
+        return fallback or ""
+    yr = None
+    m = re.search(r"(?<!\d)(20\d{2})(?!\d)", hay)          # явный год: 2026
+    if m:
+        yr = int(m.group(1))
+    else:
+        m2 = re.search(r"(?<!\d)(\d{2})(?!\d)", fn)        # 'май 26' — только из имени файла
+        if m2 and 20 <= int(m2.group(1)) <= 40:
+            yr = 2000 + int(m2.group(1))
+    if not yr:
+        yr = dt.date.today().year
+    return f"{yr}-{mon:02d}"
+
+
+def _fin_parse_simple(grid, filename=""):
+    """Разбор простого отчёта «статья | сумма» со строками ИТОГО (доход) / ИТОГО (расход).
+       Работает без ИИ — надёжно для месячных бюджетов направлений."""
+    pairs = []
+    for row in grid:
+        if not row:
+            continue
+        label = str(row[0] or "").strip()
+        val = None
+        for c in list(row)[1:5]:
+            n = _fin_num(c)
+            if n is not None:
+                val = n
+                break
+        if label or val is not None:
+            pairs.append((label, val))
+    totals = [v for l, v in pairs if l.lower().startswith("итого") and v is not None]
+    profit = [v for l, v in pairs if l.lower().startswith("прибыл") and v is not None]
+    if len(totals) >= 2:
+        income, expense = totals[0], totals[1]
+    elif len(totals) == 1 and profit:
+        income, expense = totals[0], totals[0] - profit[0]
+    else:
+        return None
+    fn = (filename or "").lower()
+    name = "Направление"
+    if "пвл" in fn or "павелец" in fn:
+        name = "ПВЛ"
+    elif "агрегат" in fn:
+        name = "Агрегатор Москва"
+    elif "астрахан" in fn:
+        name = "Астрахань"
+    elif "калмык" in fn:
+        name = "Калмыкия"
+    return {"name": name, "income": round(income, 2), "expense": round(expense, 2),
+            "profit": round(profit[0], 2) if profit else round(income - expense, 2)}
+
+
+def _json_loads_loose(txt):
+    """Терпимый разбор JSON от ИИ: снимает markdown и чинит обрыв ответа."""
+    t = (txt or "").replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    i = t.rfind("}")
+    if i > 0:
+        head = t[:i + 1]
+        for suf in ("]}", "}]}", "}", ""):
+            try:
+                return json.loads(head + suf)
+            except Exception:
+                continue
+    raise ValueError("ответ ИИ оборван")
+
+
 @app.post("/api/report/upload")
 def report_upload(b: ReportUpload, user=Depends(require_owner)):
     """Ручная загрузка Excel-отчёта с пометкой типа: агрегатор → в свод; доход/расход → ИИ → на подтверждение."""
@@ -1914,6 +2021,17 @@ def report_upload(b: ReportUpload, user=Depends(require_owner)):
                 "revenue": rev, "cost": cost, "margin": rev - cost}
 
     if b.kind == "finance":
+        # 1) Быстрый детерминированный разбор (без ИИ) — для отчётов «статья | сумма» с ИТОГО
+        try:
+            simple = _fin_parse_simple(grid, b.filename)
+        except Exception:
+            simple = None
+        if simple:
+            ym = b.ym or _fin_guess_ym(grid, b.filename) or dt.date.today().strftime("%Y-%m")
+            return {"ok": True, "kind": "finance", "ym": ym, "source": "table",
+                    "rows": [{"name": simple["name"], "income": simple["income"], "expense": simple["expense"]}],
+                    "profit": simple["profit"]}
+        # 2) Иначе — ИИ (запасной путь)
         key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not key:
             return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
@@ -1923,7 +2041,7 @@ def report_upload(b: ReportUpload, user=Depends(require_owner)):
                   '{"ym":"YYYY-MM или пусто","rows":[{"name":"направление","income":число,"expense":число}]}. '
                   "income — совокупный доход направления за месяц, expense — совокупные расходы (рубли, без пробелов). "
                   "Направления бери как в таблице. Чего нет — ставь 0.")
-        body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1200,
+        body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 4000,
                 "messages": [{"role": "user", "content": prompt + "\n\nТАБЛИЦА:\n" + text}]}
         try:
             r = requests.post("https://api.anthropic.com/v1/messages",
@@ -1932,7 +2050,7 @@ def report_upload(b: ReportUpload, user=Depends(require_owner)):
             if r.status_code != 200:
                 return {"ok": False, "error": f"claude {r.status_code}: {r.text[:120]}"}
             txt = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
-            data = json.loads(txt.replace("```json", "").replace("```", "").strip())
+            data = _json_loads_loose(txt)
         except Exception as e:
             return {"ok": False, "error": "разбор ИИ: " + str(e)[:120]}
         ym = b.ym or data.get("ym") or dt.date.today().strftime("%Y-%m")

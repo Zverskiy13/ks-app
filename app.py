@@ -262,7 +262,10 @@ def _storage_db(path):
        приложению они нужны «живыми», а не разово перенесёнными."""
     if not (_db and _db.db_available()):
         return False
-    if os.environ.get("STORAGE_BACKEND", "github") != "db":
+    # Явный аварийный тумблер: STORAGE_BACKEND=github принудительно вернёт запись в GitHub.
+    # По умолчанию — если Postgres подключён, ВСЕ свои домены храним в нём, чтобы запись
+    # не зависела от read-only GitHub-токена (иначе отметки/переносы/файлы молча падают).
+    if os.environ.get("STORAGE_BACKEND", "db") == "github":
         return False
     # Общие с ботом файлы (пишет бот). Пока бот на GitHub (BOT_ON_GITHUB=1, по умолч.) —
     # читаем их из GitHub «живьём». Когда бот переедет на общий Postgres — выставить

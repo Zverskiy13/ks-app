@@ -1427,6 +1427,8 @@ RENDER.health = function () {
 
   el("s-health").innerHTML = `${back}<h1 class="h">Здоровье</h1>
     ${summary}
+    <button class="btn red" style="margin-top:12px" onclick="hsAdvice()"><i class="ti ti-stethoscope" style="margin-right:6px"></i>ИИ-рекомендации по моим анализам</button>
+    <div class="lbl" style="padding:4px 2px 2px">ИИ разберёт твои показатели и чек-апы: образ жизни, что уточнить у врача, что и когда пересдать. Не диагноз — повод обсудить с врачом.</div>
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Напоминания о чекапах</div><div><button onclick="hsImport()" style="background:none;border:none;color:var(--muted);font-weight:600;cursor:pointer;margin-right:10px">импорт</button><button onclick="hsAddReminder()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ добавить</button></div></div>
     ${remCards}
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Результаты анализов</div><button onclick="hsAddResult()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ показатель</button></div>
@@ -1437,7 +1439,6 @@ RENDER.health = function () {
     <div class="sec-title" style="margin-top:16px">Динамика показателей</div>
     <div class="lbl" style="padding:0 2px 4px">Нажми на показатель — откроется график с зоной нормы и всеми измерениями.</div>
     <div class="card" style="padding:6px 16px">${dyn}</div>
-    <button class="btn red" style="margin-top:16px" onclick="hsAdvice()"><i class="ti ti-sparkles" style="margin-right:6px"></i>Рекомендации ИИ (образ жизни, вопросы врачу, пересдача)</button>
     <div class="sec-title" style="margin-top:16px">Что требует внимания</div>
     ${analytics}
     <div class="lbl" style="padding:12px 2px 22px">Это не диагностика. Раздел помогает планировать чекапы и обсуждать показатели со специалистом. Отклонение от диапазона — повод обсудить с врачом, а не диагноз.</div>`;

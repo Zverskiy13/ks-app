@@ -1274,9 +1274,21 @@ function hsLoad() {
   const seed = { reminders: [
       { id: "health-reminder-1", title: "Биохимия крови", type: "lab", frequencyDays: 180, nextDate: iso(12), comment: "Плановый контроль", status: "active" },
       { id: "health-reminder-2", title: "Check-up общий", type: "checkup", frequencyDays: 365, nextDate: iso(45), comment: "", status: "active" }
-    ], results: [], files: [], settings: { targetCheckupFrequencyDays: 180 } };
+    ], results: [], files: [], conclusions: [], profile: {}, settings: { targetCheckupFrequencyDays: 180 } };
   hsSave(seed); return seed;
 }
+/* профиль пользователя: пол/возраст/рост/вес/давление + ИМТ */
+function hsProfile() { const H = hsLoad(); return H.profile || {}; }
+function hsBMI(p) {
+  p = p || hsProfile();
+  const h = Number(p.height), w = Number(p.weight);
+  if (!h || !w) return null;
+  const b = w / Math.pow(h / 100, 2);
+  const cat = b < 18.5 ? "дефицит массы" : b < 25 ? "норма" : b < 30 ? "избыточная масса" : "ожирение";
+  const col = (b >= 18.5 && b < 25) ? "#1F9D55" : (b >= 25 && b < 30) ? "var(--amber,#E1A100)" : "var(--red)";
+  return { bmi: Math.round(b * 10) / 10, cat, col };
+}
+function hsProfileFilled() { const p = hsProfile(); return !!(p.sex || p.age || p.height || p.weight || p.bp_sys); }
 function hsUID(p) { return p + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000); }
 function daysLeft(iso) { const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(iso + "T00:00:00"); return Math.round((d - t) / 86400000); }
 function hsFmtD(iso) { return iso ? iso.split("-").reverse().join(".") : "—"; }
@@ -1371,6 +1383,150 @@ function hsHomeCard() {
     <div class="m">${att} показ. требуют внимания · анализы: ${hsFmtD(up)}</div></div>`;
 }
 
+/* ---- профиль: карточка, редактирование, сохранение ---- */
+function hsProfileCard() {
+  const p = hsProfile(); const bmi = hsBMI(p);
+  const chip = (label, val) => `<div style="background:#F7F7F5;border-radius:14px;padding:8px 12px;min-width:70px"><div class="lbl" style="font-size:10px">${label}</div><div style="font-weight:700;font-size:15px">${val || "—"}</div></div>`;
+  const bp = (p.bp_sys && p.bp_dia) ? `${p.bp_sys}/${p.bp_dia}` : "";
+  if (!hsProfileFilled()) {
+    return `<div class="card" style="border:1px dashed rgba(225,25,28,.35)">
+      <div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-user-heart" style="color:var(--red);margin-right:8px"></i>Мой профиль здоровья</div><button class="link" onclick="hsEditProfile()">Заполнить ›</button></div>
+      <div class="lbl" style="margin-top:6px">Заполни пол, возраст, рост, вес и давление — тогда ИИ будет разбирать анализы точнее (с учётом нормы для тебя).</div></div>`;
+  }
+  return `<div class="card">
+    <div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-user-heart" style="color:var(--red);margin-right:8px"></i>Мой профиль</div><button class="link" onclick="hsEditProfile()">Изменить</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${chip("Пол", p.sex === "m" ? "М" : p.sex === "f" ? "Ж" : "")}
+      ${chip("Возраст", p.age ? p.age + " лет" : "")}
+      ${chip("Рост", p.height ? p.height + " см" : "")}
+      ${chip("Вес", p.weight ? p.weight + " кг" : "")}
+      ${bmi ? `<div style="background:#F7F7F5;border-radius:14px;padding:8px 12px;min-width:70px"><div class="lbl" style="font-size:10px">ИМТ</div><div style="font-weight:700;font-size:15px;color:${bmi.col}">${bmi.bmi}</div><div class="lbl" style="font-size:9px;color:${bmi.col}">${bmi.cat}</div></div>` : ""}
+      ${chip("Давление", bp)}
+    </div></div>`;
+}
+function hsEditProfile() {
+  const p = hsProfile();
+  el("create").innerHTML = `<div class="sheet" style="max-height:85vh;overflow:auto"><h3>Профиль здоровья</h3>
+    <div class="lbl" style="margin-bottom:4px">Пол</div>
+    <div class="seg" id="pf_sex" style="margin-bottom:10px"><b data-v="m" class="${p.sex === "m" ? "on" : ""}">Мужской</b><b data-v="f" class="${p.sex === "f" ? "on" : ""}">Женский</b></div>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><div class="lbl" style="margin-bottom:4px">Возраст</div><input type="number" id="pf_age" value="${p.age || ""}" placeholder="лет"></div>
+      <div style="flex:1"><div class="lbl" style="margin-bottom:4px">Рост, см</div><input type="number" id="pf_h" value="${p.height || ""}" placeholder="см"></div>
+      <div style="flex:1"><div class="lbl" style="margin-bottom:4px">Вес, кг</div><input type="number" step="any" id="pf_w" value="${p.weight || ""}" placeholder="кг"></div>
+    </div>
+    <div class="lbl" style="margin:10px 0 4px">Давление (систолическое / диастолическое)</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="number" id="pf_bps" value="${p.bp_sys || ""}" placeholder="120" style="flex:1">
+      <span style="font-weight:700;color:var(--muted)">/</span>
+      <input type="number" id="pf_bpd" value="${p.bp_dia || ""}" placeholder="80" style="flex:1">
+    </div>
+    <button class="btn red" style="margin-top:14px" onclick="hsSaveProfile()">Сохранить</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+  document.querySelectorAll("#pf_sex b").forEach((b) => b.onclick = () => { document.querySelectorAll("#pf_sex b").forEach((x) => x.classList.remove("on")); b.classList.add("on"); });
+}
+function hsSaveProfile() {
+  const H = hsLoad(); const sel = document.querySelector("#pf_sex b.on");
+  H.profile = {
+    sex: sel ? sel.dataset.v : (H.profile && H.profile.sex) || "",
+    age: Number(el("pf_age").value) || "",
+    height: Number(el("pf_h").value) || "",
+    weight: Number(el("pf_w").value) || "",
+    bp_sys: Number(el("pf_bps").value) || "",
+    bp_dia: Number(el("pf_bpd").value) || "",
+    updated: new Date().toISOString().slice(0, 10)
+  };
+  hsSave(H); closeCreate(); toast("Профиль сохранён ✓"); RENDER.health();
+}
+
+/* ---- заключения врачей (фото/скан → текст, или вручную) ---- */
+function hsScanConclusion() {
+  _pickFile(async (f) => {
+    el("create").innerHTML = `<div class="sheet"><h3>Распознаю заключение…</h3><div class="lbl">ИИ читает документ — пара секунд.</div></div>`;
+    el("create").classList.remove("hidden");
+    const isImg = /^image\//.test(f.type || "");
+    const b64 = await _downscaleFile(f, 1800, 0.82);
+    const mime = isImg ? "image/jpeg" : (f.type || "application/pdf");
+    const fname = f.name || ("Заключение " + new Date().toLocaleDateString("ru"));
+    let fileMeta = null;
+    try { const up = await API.healthFilePut(fname, mime, b64); if (up && up.ok) fileMeta = { id: up.id, name: up.name, date: up.date, mime: up.mime }; } catch (e) {}
+    const r = await API.vision(b64, mime, "text");
+    const text = (r && r.ok && r.text) ? String(r.text).trim() : "";
+    if (fileMeta) { const H = hsLoad(); if (!(H.files || []).some((x) => x.id === fileMeta.id)) { H.files.push(fileMeta); hsSave(H); } }
+    if (!text) { closeCreate(); toast("Не удалось распознать" + (fileMeta ? " (файл сохранён)" : "")); return; }
+    hsConclusionConfirm(text, fileMeta);
+  });
+}
+function hsConclusionConfirm(text, fileMeta) {
+  el("create").innerHTML = `<div class="sheet" style="max-height:82vh;overflow:auto"><h3>Заключение врача</h3>
+    <div class="lbl" style="margin-bottom:4px">Дата</div>
+    <input type="date" id="cc_date" value="${new Date().toISOString().slice(0, 10)}" style="width:100%;margin-bottom:8px">
+    <div class="lbl" style="margin-bottom:4px">Текст (проверь и поправь)</div>
+    <textarea id="cc_text" style="width:100%;min-height:180px">${esc(text)}</textarea>
+    <button class="btn red" style="margin-top:12px" onclick="hsSaveConclusion('${(fileMeta && fileMeta.id) || ""}')">Сохранить</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsAddConclusion() { hsConclusionConfirm("", null); }
+function hsSaveConclusion(fileId) {
+  const H = hsLoad(); H.conclusions = H.conclusions || [];
+  const text = (el("cc_text").value || "").trim(); if (!text) { toast("Пусто"); return; }
+  H.conclusions.push({ id: hsUID("health-concl"), date: el("cc_date").value, text, fileId: fileId || "" });
+  hsSave(H); closeCreate(); toast("Заключение сохранено ✓"); hsOfferReport(); RENDER.health();
+}
+function hsDeleteConclusion(id) { const H = hsLoad(); H.conclusions = (H.conclusions || []).filter((c) => c.id !== id); hsSave(H); RENDER.health(); }
+
+/* ---- общий разбор здоровья (профиль + анализы + заключения) ---- */
+function hsBuildSummary() {
+  const H = hsLoad(); const p = hsProfile(); const bmi = hsBMI(p); const L = [];
+  const prof = [];
+  if (p.sex) prof.push("пол: " + (p.sex === "m" ? "мужской" : "женский"));
+  if (p.age) prof.push("возраст: " + p.age);
+  if (p.height) prof.push("рост: " + p.height + " см");
+  if (p.weight) prof.push("вес: " + p.weight + " кг");
+  if (bmi) prof.push("ИМТ: " + bmi.bmi + " (" + bmi.cat + ")");
+  if (p.bp_sys && p.bp_dia) prof.push("давление: " + p.bp_sys + "/" + p.bp_dia);
+  L.push("ПРОФИЛЬ: " + (prof.join(", ") || "не заполнен"));
+  const mk = [];
+  HS_MARKERS.forEach((m) => { const rows = hsLatest(m); if (rows.length) mk.push(`${m}: ${rows[0].value} ${rows[0].unit || ""} (${hsStatus(rows[0])}${rows.length >= 2 ? ", прошлое " + rows[1].value : ""}), норма ${hsRefText(rows[0]).replace("норма ", "")}`); });
+  H.results.slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 30).forEach((r) => { if (!HS_MARKERS.includes(r.marker)) mk.push(`${r.marker}: ${r.value} ${r.unit || ""} (${hsStatus(r)}) от ${r.date}`); });
+  L.push("ПОКАЗАТЕЛИ:\n" + (mk.length ? mk.join("\n") : "нет внесённых анализов"));
+  const cc = (H.conclusions || []).slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 6);
+  if (cc.length) L.push("ЗАКЛЮЧЕНИЯ ВРАЧЕЙ:\n" + cc.map((c) => `[${c.date}] ${c.text}`).join("\n---\n"));
+  const act = hsActive().map((r) => { const dl = daysLeft(r.nextDate); return `${r.title}: ${dl < 0 ? "просрочен " + (-dl) + "д" : "через " + dl + "д"}`; });
+  if (act.length) L.push("ЧЕКАПЫ: " + act.join("; "));
+  return L.join("\n\n");
+}
+async function hsFullReport() {
+  const summary = hsBuildSummary();
+  el("create").innerHTML = `<div class="sheet"><h3>ИИ разбирает здоровье…</h3><div class="lbl">Анализирую профиль, анализы и заключения — 5–10 секунд.</div></div>`;
+  el("create").classList.remove("hidden");
+  const r = await API.healthReport(summary);
+  if (!(r && r.ok !== false)) { closeCreate(); toast("Не вышло" + (r && r.error ? ": " + r.error : "")); return; }
+  try { const H = hsLoad(); H.lastReport = { date: new Date().toISOString().slice(0, 10), data: r }; hsSave(H); } catch (e) {}
+  hsShowReport(r);
+}
+function hsShowReport(r) {
+  const sect = (title, arr, icon, col) => (arr && arr.length) ? `<div class="sec-title" style="margin-top:12px">${icon} ${esc(title)}</div><div class="card" style="padding:6px 16px${col ? ";border-left:3px solid " + col : ""}">${arr.map((x) => `<div class="li"><div class="t">${esc(String(x))}</div></div>`).join("")}</div>` : "";
+  el("create").innerHTML = `<div class="sheet" style="max-height:86vh;overflow:auto"><h3>🩺 Общий разбор здоровья</h3>
+    ${r.overview ? `<div class="card"><div class="t">${esc(String(r.overview))}</div></div>` : ""}
+    ${sect("На что обратить внимание", r.red_flags, "⚠️", "var(--red)")}
+    ${sect("Что стоит проверить", r.possible, "🔍")}
+    ${sect("К каким врачам обратиться", r.doctors, "🩺")}
+    ${sect("Образ жизни", r.lifestyle, "🌿")}
+    ${sect("Когда пересдать / проверить", r.retest, "🔁")}
+    <div class="lbl" style="padding:10px 2px 4px">Это не диагноз и не назначение лечения — помощь в навигации. Решения принимает врач.</div>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Закрыть</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsOfferReport() {
+  el("create").innerHTML = `<div class="sheet"><h3>Данные добавлены ✓</h3>
+    <div class="lbl" style="margin-bottom:12px">Сделать общий разбор здоровья с учётом новых данных — вывод, к каким врачам идти и что стоит проверить?</div>
+    <button class="btn red" onclick="hsFullReport()">🩺 Сделать разбор</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Позже</button></div>`;
+  el("create").classList.remove("hidden");
+}
+
 /* ---- экран «Здоровье» ---- */
 RENDER.health = function () {
   const H = hsLoad();
@@ -1425,10 +1581,12 @@ RENDER.health = function () {
   else if (lu && daysLeft(lu) < -180) sig.push("Анализы не обновлялись более 6 месяцев.");
   const analytics = sig.length ? `<div class="card" style="padding:6px 16px">${sig.map((s) => `<div class="li"><i class="ti ti-alert-triangle" style="color:var(--red)"></i><div class="t">${esc(s)}</div></div>`).join("")}</div>` : `<div class="card"><div class="lbl">Сейчас ничего критичного не вижу. Так держать 👍</div></div>`;
 
+  const lastRep = hsLoad().lastReport;
   el("s-health").innerHTML = `${back}<h1 class="h">Здоровье</h1>
     ${summary}
-    <button class="btn red" style="margin-top:12px" onclick="hsAdvice()"><i class="ti ti-stethoscope" style="margin-right:6px"></i>ИИ-рекомендации по моим анализам</button>
-    <div class="lbl" style="padding:4px 2px 2px">ИИ разберёт твои показатели и чек-апы: образ жизни, что уточнить у врача, что и когда пересдать. Не диагноз — повод обсудить с врачом.</div>
+    ${hsProfileCard()}
+    <button class="btn red" style="margin-top:6px" onclick="hsFullReport()"><i class="ti ti-stethoscope" style="margin-right:6px"></i>Общий разбор здоровья (ИИ)</button>
+    <div class="lbl" style="padding:4px 2px 2px">ИИ разберёт профиль, анализы и заключения врачей: общий вывод, что стоит проверить, к каким врачам обратиться.${lastRep ? " Последний разбор: " + hsFmtD(lastRep.date) + "." : ""}</div>
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Напоминания о чекапах</div><div><button onclick="hsImport()" style="background:none;border:none;color:var(--muted);font-weight:600;cursor:pointer;margin-right:10px">импорт</button><button onclick="hsAddReminder()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ добавить</button></div></div>
     ${remCards}
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Результаты анализов</div><button onclick="hsAddResult()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ показатель</button></div>
@@ -1436,6 +1594,9 @@ RENDER.health = function () {
     <button class="btn red" style="margin-top:10px" onclick="hsScanResults()"><i class="ti ti-camera" style="margin-right:6px"></i>Фото/скан анализов — ИИ распознает</button>
     <div class="lbl" style="padding:4px 2px 0">Сфотографируй бланк или загрузи PDF — ИИ вытащит показатели, ты проверишь и сохранишь. Сам файл сохранится на сервере.</div>
     ${fileList}
+    <div class="row spread" style="margin-top:16px"><div class="sec-title">Заключения врачей</div><button onclick="hsAddConclusion()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ текстом</button></div>
+    ${(function(){ const cc = (H.conclusions || []).slice().sort((a, b) => a.date < b.date ? 1 : -1); return cc.length ? `<div class="card" style="padding:6px 16px">${cc.map((c) => `<div class="li"><i class="ti ti-notes" style="color:var(--red)"></i><div class="t"><div style="font-weight:500">${hsFmtD(c.date)}</div><div class="m" style="white-space:pre-wrap">${esc(c.text.length > 220 ? c.text.slice(0,220) + "…" : c.text)}</div></div><button onclick="hsDeleteConclusion('${c.id}')" title="Удалить" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:#c0392b;cursor:pointer"><i class="ti ti-trash"></i></button></div>`).join("")}</div>` : `<div class="lbl" style="padding:2px 2px 0">Заключений пока нет.</div>`; })()}
+    <button class="btn ghost" style="margin-top:10px" onclick="hsScanConclusion()"><i class="ti ti-file-text" style="margin-right:6px"></i>Заключение врача — фото/скан</button>
     <div class="sec-title" style="margin-top:16px">Динамика показателей</div>
     <div class="lbl" style="padding:0 2px 4px">Нажми на показатель — откроется график с зоной нормы и всеми измерениями.</div>
     <div class="card" style="padding:6px 16px">${dyn}</div>
@@ -1594,7 +1755,8 @@ function hsSaveExtract(n) {
     added++;
   }
   if (E.file && !(H.files || []).some((f) => f.id === E.file.id)) H.files.push(E.file);
-  hsSave(H); closeCreate(); toast(added ? ("Добавлено показателей: " + added) : "Ничего не выбрано"); RENDER.health();
+  hsSave(H); closeCreate(); toast(added ? ("Добавлено показателей: " + added) : "Ничего не выбрано");
+  if (added) hsOfferReport(); else RENDER.health();
 }
 async function hsOpenFile(id) {
   toast("Открываю…");

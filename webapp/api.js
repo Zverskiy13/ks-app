@@ -96,6 +96,7 @@ const API = {
   healthFilePut(name, mime, data_b64) { return this._post("health/file", { name, mime, data_b64 }); },
   healthFileDelete(id) { return this._post("health/file/delete", { id }); },
   healthAdvice(summary) { return this._post("health/advice", { summary }); },
+  healthReport(summary) { return this._post("health/report", { summary }); },
   healthCheckups(items) { return this._post("health/checkups", { items }); },
   assistant(profile, mode, question, health) { return this._post("assistant", { mode: mode || "cached", question: question || "", health: health || {} }); },
   brain(text) { return this._post("brain", { text }); },

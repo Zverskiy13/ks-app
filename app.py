@@ -2228,6 +2228,51 @@ def health_advice(b: HAdvice):
         return {"ok": False, "error": str(e)[:160]}
 
 
+class HReport(BaseModel):
+    summary: str = ""
+
+
+@app.post("/api/health/report")
+def health_report(b: HReport):
+    """Общий разбор здоровья: профиль (пол/возраст/ИМТ/давление) + все показатели + заключения врачей."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY не задан на сервере"}
+    sys = ("Ты — внимательный медицинский ассистент-навигатор. Тебе дают профиль человека "
+           "(пол, возраст, рост, вес, ИМТ, давление), результаты его анализов и заключения врачей. "
+           "Сделай ОБЩИЙ разбор состояния здоровья простым человеческим языком. "
+           "ВАЖНО: ты НЕ ставишь диагноз и НЕ назначаешь лечение/препараты. Ты помогаешь человеку понять "
+           "картину и к каким специалистам стоит обратиться. Формулировки про 'что может происходить' давай "
+           "как аккуратные гипотезы для обсуждения с врачом ('стоит проверить…', 'может быть связано с…'), "
+           "без категоричности и без запугивания. Учитывай пол, возраст и ИМТ при интерпретации. "
+           "Верни СТРОГО JSON без markdown: "
+           '{"overview":"2-4 фразы общего вывода о состоянии","possible":["аккуратная гипотеза, что стоит проверить и почему", ...],'
+           '"doctors":["конкретный врач (напр. эндокринолог) — зачем к нему", ...],'
+           '"lifestyle":["совет по питанию/режиму/активности", ...],'
+           '"retest":["что и примерно когда пересдать/проверить", ...],'
+           '"red_flags":["на что обратить внимание в ближайшее время (если есть)", ...]}. '
+           "По-русски, коротко и конкретно, 3-6 пунктов в списках (red_flags — только если реально есть повод, иначе пустой список). "
+           "Если данных мало — честно скажи это в overview и предложи, какие базовые обследования сдать.")
+    body = {"model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"), "max_tokens": 1600,
+            "system": sys,
+            "messages": [{"role": "user", "content": "Данные человека:\n" + (b.summary or "нет данных")}]}
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages",
+                          headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                          json=body, timeout=120)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"claude {r.status_code}: {r.text[:160]}"}
+        txt = "".join(p.get("text", "") for p in r.json().get("content", []) if p.get("type") == "text")
+        try:
+            data = json.loads(txt.replace("```json", "").replace("```", "").strip())
+        except Exception:
+            data = {"overview": txt.strip(), "possible": [], "doctors": [], "lifestyle": [], "retest": [], "red_flags": []}
+        data["ok"] = True
+        return data
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:160]}
+
+
 # ---------- объединённый главный экран (1 запрос вместо 3) ----------
 @app.get("/api/home")
 def home_combined(user=Depends(current_user)):

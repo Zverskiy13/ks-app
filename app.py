@@ -1432,26 +1432,43 @@ class ItemDone(BaseModel):
 
 @app.post("/api/item/done")
 def item_done(b: ItemDone):
+    tgt = (b.text or "").strip()
     if b.kind == "block":
         ag = load_json("state/agenda.json", [])
+        # Устойчивый поиск: среди вхождений на эту дату, ещё не выполненных и с этим временем,
+        # берём точное совпадение текста; если такого нет — первый подходящий по времени.
+        cand = None
         for a in ag:
-            if _match_block(a, b.date, b.start, b.text):
-                if a.get("repeat"):
-                    dd = a.setdefault("done_dates", [])
-                    if b.date not in dd:
-                        dd.append(b.date)
-                else:
-                    a["done"] = True
-                return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок выполнен")}
-        return {"ok": False, "reason": "not found"}
+            if a.get("start") == b.start and _occurs(a, b.date) and not _occ_done(a, b.date):
+                if (a.get("text", "") or "").strip() == tgt:
+                    cand = a
+                    break
+                if cand is None:
+                    cand = a
+        if cand is None:
+            return {"ok": True, "note": "already"}   # уже выполнено/нет активного — не ругаемся
+        if cand.get("repeat"):
+            dd = cand.setdefault("done_dates", [])
+            if b.date not in dd:
+                dd.append(b.date)
+        else:
+            cand["done"] = True
+        return {"ok": gh_write("state/agenda.json", json.dumps(ag, ensure_ascii=False, indent=2), "app: блок выполнен")}
     else:
         rems = load_json("state/reminders.json", [])
+        best = None
         for r in rems:
             w = r.get("when", "")
-            if w[:10] == b.date and w[11:16] == b.start and r.get("text", "") == b.text:
-                r["done"] = True
-                return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминание выполнено")}
-        return {"ok": False, "reason": "not found"}
+            if len(w) >= 16 and w[:10] == b.date and w[11:16] == b.start and not r.get("done"):
+                if (r.get("text", "") or "").strip() == tgt:
+                    best = r
+                    break
+                if best is None:
+                    best = r
+        if best is None:
+            return {"ok": True, "note": "already"}
+        best["done"] = True
+        return {"ok": gh_write("state/reminders.json", json.dumps(rems, ensure_ascii=False, indent=2), "app: напоминание выполнено")}
 
 
 @app.post("/api/item/undone")

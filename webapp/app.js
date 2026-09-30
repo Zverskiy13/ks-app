@@ -778,20 +778,53 @@ function groupShift(n) {
   if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; }
   groupYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.group();
 }
-function openGroupForm() {
+function _captureNewDirs() {
+  (window.__newDirs || []).forEach((r, k) => {
+    if (el("gnn" + k)) r.name = el("gnn" + k).value;
+    if (el("gni" + k)) r.income = el("gni" + k).value;
+    if (el("gne" + k)) r.expense = el("gne" + k).value;
+    if (el("gns" + k)) r.share = el("gns" + k).value;
+  });
+}
+function addDirRow() {
+  _captureNewDirs();
+  window.__newDirs = window.__newDirs || [];
+  window.__newDirs.push({ name: "", income: "", expense: "", share: 100 });
+  openGroupForm(true);
+}
+function delNewDir(k) {
+  _captureNewDirs();
+  (window.__newDirs || []).splice(k, 1);
+  openGroupForm(true);
+}
+function openGroupForm(keep) {
+  if (!keep) window.__newDirs = [];
+  window.__newDirs = window.__newDirs || [];
   const d = window.__group || { rows: [], ym: groupYM };
   const nf = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n || 0));
-  el("create").innerHTML = `
-    <div class="sheet" style="max-height:85vh;overflow:auto">
-      <h3>Доход/расход за ${d.ym}</h3>
-      <div class="lbl" style="margin-bottom:8px">По направлению: доход и расход (₽), доля (%). Чистая = доход − расход.</div>
-      <div id="gform">${(d.rows || []).map((r, i) => `<div style="margin-bottom:10px;border-bottom:1px solid var(--line,#eee);padding-bottom:8px">
+  const existing = (d.rows || []).map((r, i) => `<div style="margin-bottom:10px;border-bottom:1px solid var(--line,#eee);padding-bottom:8px">
         <div style="font-weight:700;font-size:13px;margin-bottom:4px">${esc(r.name)}${r.agg_suggest != null ? ` <span class="link" style="font-weight:600;cursor:pointer" onclick="gpSuggest(${i},${r.agg_suggest})">маржа агрегатора ${nf(r.agg_suggest)} →</span>` : ""}</div>
         <div style="display:flex;gap:8px">
           <input id="gi${i}" type="number" inputmode="numeric" placeholder="доход" value="${r.income == null ? "" : r.income}" style="flex:1">
           <input id="ge${i}" type="number" inputmode="numeric" placeholder="расход" value="${r.expense == null ? "" : r.expense}" style="flex:1">
           <input id="gs${i}" type="number" inputmode="numeric" placeholder="%" value="${Math.round((r.share == null ? 1 : r.share) * 100)}" style="width:52px">
-        </div></div>`).join("")}</div>
+        </div></div>`).join("");
+  const news = (window.__newDirs || []).map((r, k) => `<div style="margin-bottom:10px;border-bottom:1px solid var(--line,#eee);padding-bottom:8px">
+        <div style="display:flex;gap:8px;margin-bottom:4px">
+          <input id="gnn${k}" placeholder="название направления" value="${esc(r.name || "")}" style="flex:1;font-weight:700">
+          <span class="link" style="cursor:pointer;padding:6px" onclick="delNewDir(${k})">✕</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input id="gni${k}" type="number" inputmode="numeric" placeholder="доход" value="${r.income == null ? "" : r.income}" style="flex:1">
+          <input id="gne${k}" type="number" inputmode="numeric" placeholder="расход" value="${r.expense == null ? "" : r.expense}" style="flex:1">
+          <input id="gns${k}" type="number" inputmode="numeric" placeholder="%" value="${r.share == null ? 100 : r.share}" style="width:52px">
+        </div></div>`).join("");
+  el("create").innerHTML = `
+    <div class="sheet" style="max-height:85vh;overflow:auto">
+      <h3>Доход/расход за ${d.ym}</h3>
+      <div class="lbl" style="margin-bottom:8px">По направлению: доход и расход (₽), доля (%). Чистая = доход − расход.</div>
+      <div id="gform">${existing}${news}</div>
+      <button class="btn ghost" style="margin-top:8px" onclick="addDirRow()">＋ Добавить направление</button>
       <button class="btn red" style="margin-top:8px" onclick="saveGroupForm()">Сохранить</button>
       <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
     </div>`;
@@ -842,6 +875,15 @@ async function saveGroupForm() {
     const s = el("gs" + i) ? el("gs" + i).value : "";
     return { name: r.name, income: inc === "" ? null : Number(inc), expense: exp === "" ? null : Number(exp), share: s === "" ? 1 : Number(s) / 100 };
   });
+  (window.__newDirs || []).forEach((r, k) => {
+    const nm = el("gnn" + k) ? el("gnn" + k).value.trim() : (r.name || "").trim();
+    if (!nm) return;
+    const inc = el("gni" + k) ? el("gni" + k).value : "";
+    const exp = el("gne" + k) ? el("gne" + k).value : "";
+    const s = el("gns" + k) ? el("gns" + k).value : "";
+    rows.push({ name: nm, income: inc === "" ? null : Number(inc), expense: exp === "" ? null : Number(exp), share: s === "" ? 1 : Number(s) / 100 });
+  });
+  window.__newDirs = [];
   toast("Сохраняю…");
   const r = await API.groupSave(d.ym, rows);
   closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось");

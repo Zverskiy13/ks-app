@@ -19,6 +19,9 @@ let curDay = new Date().toISOString().slice(0, 10);
 let viewYM = curDay.slice(0, 7);
 function shiftMonth(n) { let [y, m] = viewYM.split("-").map(Number); m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } viewYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.day(); }
 function pickDay(iso) { curDay = iso; viewYM = iso.slice(0, 7); RENDER.day(); }
+async function payToggle(id) { const r = await API.payrollToggle(curDay, id); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
+async function payAdd() { const nm = prompt("Фамилия или имя сотрудника:"); if (!nm || !nm.trim()) return; const r = await API.payrollRoster("add", { name: nm.trim() }); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
+async function payDel(id) { if (!confirm("Убрать сотрудника из списка зарплаты?")) return; const r = await API.payrollRoster("del", { id }); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
 function dayLabel(iso) { const d = new Date(iso); const t = new Date().toISOString().slice(0, 10); return (iso === t ? "Сегодня · " : "") + WD[d.getDay()] + " " + iso.slice(8, 10) + "." + iso.slice(5, 7); }
 
 /* ---------- PIN login ---------- */
@@ -106,6 +109,7 @@ function show(s) {
 }
 
 /* ---------- renderers ---------- */
+const APP_VERSION = "v69";
 const RENDER = {
   async home() {
     const H = await API.home(profile).catch(() => ({ agenda: [], deadlines: [], tasks: [] }));
@@ -119,7 +123,7 @@ const RENDER = {
     const aiSum = (AID && AID.digest && AID.digest.summary) ? AID.digest.summary : "";
     const directorText = aiSum ? esc(aiSum) : (top ? `Фокус дня — ${esc(top.text)}. ${hotDls ? `Горящих дедлайнов: ${hotDls}.` : "Критичных дедлайнов нет."}` : (hotDls ? `Нет главной задачи, но есть ${hotDls} горящих дедлайнов.` : "Критичных рисков на сегодня не вижу."));
     el("s-home").innerHTML = `
-      <div class="sub">${dateLabelToday()}</div>
+      <div class="sub">${dateLabelToday()} · <span style="color:#bbb">${APP_VERSION}</span></div>
       <h1 class="h">${profile.role === "owner" ? "Панель<br>управления" : "Привет,<br>" + profile.name.split(" ")[0]}</h1>
       ${profile.role === "owner" ? `<div class="director-note" onclick="show('assist')" style="cursor:pointer"><div class="k">ИИ-ПОМОЩНИК</div><div class="v">${directorText}</div><div class="link" style="margin-top:6px">Открыть помощника ›</div></div>
       <div class="board-pulse">
@@ -156,6 +160,22 @@ const RENDER = {
     const mk = await API.month(viewYM);
     const marks = new Set(mk.dates || []);
     const status = mk.status || {};
+    // Блок зарплаты на 10 и 24 число
+    let payHTML = "";
+    const dnum = parseInt(curDay.slice(8, 10), 10);
+    if (dnum === 10 || dnum === 24) {
+      const pr = await API.payroll(curDay).catch(() => ({ roster: [], paid: {} }));
+      const roster = pr.roster || [], paid = pr.paid || {};
+      const paidCnt = roster.filter((e) => paid[e.id]).length;
+      const rows = roster.map((e) => {
+        const on = !!paid[e.id];
+        return `<div class="li" style="padding:6px 0"><span class="chk${on ? " done" : ""}" onclick="payToggle('${e.id}')" title="Выдал / не выдал"><span style="font-size:14px;font-weight:800">✓</span></span><span class="t" style="font-weight:500;${on ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(e.name)}</span><button onclick="payDel('${e.id}')" title="Убрать" style="border:none;background:none;color:#ccc;cursor:pointer;font-size:17px;line-height:1">×</button></div>`;
+      }).join("");
+      payHTML = `<div class="sec-title" style="margin-top:14px">💰 Зарплата — ${dnum} число (${paidCnt}/${roster.length})</div>
+        <div class="card" style="padding:6px 16px">${rows || `<div class="lbl" style="padding:12px 0">Список пуст — добавьте сотрудников</div>`}
+          <div style="padding:8px 0"><button onclick="payAdd()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ сотрудник</button></div>
+        </div>`;
+    }
     const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
     const [Y, M] = viewYM.split("-").map(Number);
     const startW = (new Date(Y, M - 1, 1).getDay() + 6) % 7;
@@ -189,6 +209,7 @@ const RENDER = {
         ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}${it.recurring ? ` <span class="lbl" style="color:var(--red)" title="Повтор">🔁 ${esc(it.repeat_label || '')}</span>` : ""}</span><span style="color:#bbb;cursor:pointer;font-size:15px" onclick="editItem(${i})">✎</span></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
       ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}
+      ${payHTML}
       ${dd.done && dd.done.length ? `<div class="sec-title" style="margin-top:10px">✓ Выполнено в этот день (${dd.done.length})</div>
       <div class="card" style="padding:4px 16px">${dd.done.map((it, i) => `<div class="li"><span class="chk done"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}${it.recurring ? " 🔁" : ""}</span><button onclick="itemUndone(${i})" title="Вернуть в работу" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 10px;color:var(--red);cursor:pointer;font-size:15px">↩</button></div>`).join("")}</div>
       <div class="lbl" style="padding:4px 4px 0">↩ вернуть в работу — снять отметку и снова редактировать</div>` : ""}`;
@@ -228,23 +249,40 @@ const RENDER = {
   async money() {
     const f = await API.finance(profile);
     if (f.scope === "group") {
-      const d = f.data, pct = Math.min(100, Math.round(d.ownerIncome / d.goal * 100));
+      // помесячные финансы: доход владельца, путь к 5 млн, история и переключение месяцев
+      const d = await API.group(profile, moneyYM).catch(() => ({ rows: [], total: 0, owner_income: 0, months: [], trend: [], ym: moneyYM, goal: 5000000 }));
+      moneyYM = d.ym || moneyYM;
+      window.__group = d;
+      const nf = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n || 0));
+      const MM = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
+      const ymL = (ym) => ym ? MM[parseInt(ym.slice(5, 7)) - 1] + " " + ym.slice(0, 4) : "";
+      const dlt = (p, prev) => (typeof p === "number" && typeof prev === "number") ? `<span style="color:${p - prev >= 0 ? "#15A06D" : "#C0392B"};font-size:11.5px;font-weight:700">${p - prev >= 0 ? "▲" : "▼"} ${nf(Math.abs(p - prev))}</span>` : "";
+      const goal = d.goal || 5000000;
+      const pct = Math.min(100, Math.round((d.owner_income || 0) / goal * 100));
+      const levers = (f.data && f.data.levers) || [];
       el("s-money").innerHTML = `
         <h1 class="h">Финансы</h1>
-        <div class="card"><div class="lbl">Твой доход (доля)</div>
-          <div class="big">${fmt(d.ownerIncome)}</div>
+        <div class="row spread" style="margin:2px 0 12px">
+          <button class="mbtn" onclick="moneyShift(-1)" aria-label="Пред. месяц" style="font-size:22px;line-height:1">‹</button>
+          <div style="font-size:17px;font-weight:800">${ymL(d.ym)}</div>
+          <button class="mbtn" onclick="moneyShift(1)" aria-label="След. месяц" style="font-size:22px;line-height:1">›</button>
+        </div>
+        <div class="card"><div class="lbl">Твой доход за месяц (с учётом долей)</div>
+          <div class="big">${nf(d.owner_income)} ₽</div>
           <div class="bar"><span style="width:${pct}%"></span></div>
-          <div class="row spread"><span class="lbl">цель ${fmt(d.goal)} · ${pct}%</span><span class="lbl" style="font-weight:600;color:var(--ink)">ещё ${fmt(d.goal - d.ownerIncome)}</span></div>
+          <div class="row spread"><span class="lbl">цель ${nf(goal)} · ${pct}%</span><span class="lbl" style="font-weight:600;color:var(--ink)">до цели ${nf(Math.max(0, goal - (d.owner_income || 0)))} ₽</span></div>
+          <div class="lbl" style="margin-top:6px">Чистая прибыль группы за месяц: <b style="color:var(--ink)">${nf(d.total)} ₽</b></div>
         </div>
-        <div class="metrics">
-          <div class="metric"><div class="lbl" style="font-size:11px">Долг</div><div class="n">${(d.debt/1e6).toFixed(1)} млн</div></div>
-          ${d.companies.slice(0,2).map((c)=>`<div class="metric"><div class="lbl" style="font-size:11px">${c.name.split("·").pop().trim()}</div><div class="n">${(c.profit/1e6).toFixed(2)} млн</div></div>`).join("")}
-        </div>
-        <div class="card" onclick="show('group')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-building-community" style="color:var(--red);margin-right:8px"></i>Группа компаний — прибыль по месяцам</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
-        <div class="card" onclick="show('pvl')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
+        <div class="card" style="padding:6px 16px">${(d.rows || []).map((r) => `<div class="li"><div class="t"><div style="font-weight:700">${esc(r.name)}${r.share && r.share !== 1 ? ` <span class="lbl" style="font-weight:400">· доля ${Math.round(r.share * 100)}%</span>` : ""}</div><div class="m">${r.net == null ? "нет данных за месяц" : `доход ${nf(r.income)} − расход ${nf(r.expense)} ${dlt(r.net, r.prev_net)}`}</div></div><div style="font-weight:800">${r.net == null ? "—" : nf(r.net)}</div></div>`).join("") || '<div class="lbl" style="padding:10px 0">Направлений нет</div>'}</div>
+        ${d.agg_total ? `<div class="lbl" style="padding:6px 2px">🧾 Маржа агрегатора за месяц (справочно): <b>${nf(d.agg_total)} ₽</b> — в форме есть кнопка подставить её как доход «Агрегатора».</div>` : ""}
+        <button class="btn red" onclick="openGroupForm()">Внести доход/расход за ${ymL(d.ym)}</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="uploadReport()">📥 Загрузить Excel‑отчёт</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="scanFinance()"><i class="ti ti-camera" style="margin-right:6px"></i>Распознать отчёт фото/PDF</button>
+        ${(d.trend && d.trend.length > 1) ? `<div class="sec-title" style="margin-top:16px">История по месяцам</div><div class="card" style="padding:6px 16px">${d.trend.map((t) => `<div class="li"><span class="t">${ymL(t.ym)}</span><span style="font-weight:700">${nf(t.total)} ₽</span></div>`).join("")}</div>` : ""}
+        ${levers.length ? `<div class="sec-title" style="margin-top:16px">Рычаги к 5 млн</div><div class="card">${levers.map((l)=>`<div style="padding:8px 0"><div class="row spread" style="font-size:13px;font-weight:500"><span>${esc(l.name || "")}</span><span class="lbl">+${Math.round((l.impact||0)/1000)} т</span></div><div class="bar sm"><span style="width:${l.progress||0}%"></span></div></div>`).join("")}</div>` : ""}
+        <div class="card" onclick="show('pvl')" style="cursor:pointer;margin-top:10px"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-users" style="color:var(--red);margin-right:8px"></i>Пилот ПВЛ — команда и ИИ-отчёт</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
         <div class="card" onclick="show('agg')" style="cursor:pointer"><div class="row spread"><div class="t" style="font-weight:700"><i class="ti ti-chart-bar" style="color:var(--red);margin-right:8px"></i>Агрегатор — выручка и маржа</div><span style="color:#bbb;font-size:18px;line-height:1">›</span></div></div>
-        <div class="sec-title">Рычаги к 5 млн</div>
-        <div class="card">${d.levers.map((l)=>`<div style="padding:8px 0"><div class="row spread" style="font-size:13px;font-weight:500"><span>${l.name}</span><span class="lbl">+${Math.round(l.impact/1000)} т</span></div><div class="bar sm"><span style="width:${l.progress}%"></span></div></div>`).join("")}</div>`;
+        <div class="lbl" style="padding:8px 2px">Прибыль = доход − ВСЕ расходы. Заноси факт по каждому направлению за месяц — доход владельца и путь к 5 млн пересчитываются сами. Переключай месяцы стрелками ‹ ›.</div>`;
     } else if (f.scope === "company") {
       el("s-money").innerHTML = `<h1 class="h">Финансы компании</h1>
         ${f.data.companies.map((c)=>`<div class="card"><div class="lbl">${c.name}</div><div class="big">${fmt(c.profit)}</div><div class="lbl">операционная прибыль / мес</div></div>`).join("")}
@@ -721,6 +759,13 @@ async function delBigGoal(id) {
 
 /* ---- группа компаний: прибыль по месяцам ---- */
 let groupYM = "";
+let moneyYM = "";
+function moneyShift(n) {
+  const cur = (window.__group && window.__group.ym) || new Date().toISOString().slice(0, 7);
+  let y = parseInt(cur.slice(0, 4)), m = parseInt(cur.slice(5, 7)) + n;
+  if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; }
+  moneyYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.money();
+}
 RENDER.group = async function () {
   const d = await API.group(profile, groupYM).catch(() => ({ rows: [], total: 0, owner_income: 0, months: [], trend: [], ym: groupYM }));
   groupYM = d.ym || groupYM;
@@ -754,20 +799,53 @@ function groupShift(n) {
   if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; }
   groupYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.group();
 }
-function openGroupForm() {
+function _captureNewDirs() {
+  (window.__newDirs || []).forEach((r, k) => {
+    if (el("gnn" + k)) r.name = el("gnn" + k).value;
+    if (el("gni" + k)) r.income = el("gni" + k).value;
+    if (el("gne" + k)) r.expense = el("gne" + k).value;
+    if (el("gns" + k)) r.share = el("gns" + k).value;
+  });
+}
+function addDirRow() {
+  _captureNewDirs();
+  window.__newDirs = window.__newDirs || [];
+  window.__newDirs.push({ name: "", income: "", expense: "", share: 100 });
+  openGroupForm(true);
+}
+function delNewDir(k) {
+  _captureNewDirs();
+  (window.__newDirs || []).splice(k, 1);
+  openGroupForm(true);
+}
+function openGroupForm(keep) {
+  if (!keep) window.__newDirs = [];
+  window.__newDirs = window.__newDirs || [];
   const d = window.__group || { rows: [], ym: groupYM };
   const nf = (n) => new Intl.NumberFormat("ru-RU").format(Math.round(n || 0));
-  el("create").innerHTML = `
-    <div class="sheet" style="max-height:85vh;overflow:auto">
-      <h3>Доход/расход за ${d.ym}</h3>
-      <div class="lbl" style="margin-bottom:8px">По направлению: доход и расход (₽), доля (%). Чистая = доход − расход.</div>
-      <div id="gform">${(d.rows || []).map((r, i) => `<div style="margin-bottom:10px;border-bottom:1px solid var(--line,#eee);padding-bottom:8px">
+  const existing = (d.rows || []).map((r, i) => `<div style="margin-bottom:10px;border-bottom:1px solid var(--line,#eee);padding-bottom:8px">
         <div style="font-weight:700;font-size:13px;margin-bottom:4px">${esc(r.name)}${r.agg_suggest != null ? ` <span class="link" style="font-weight:600;cursor:pointer" onclick="gpSuggest(${i},${r.agg_suggest})">маржа агрегатора ${nf(r.agg_suggest)} →</span>` : ""}</div>
         <div style="display:flex;gap:8px">
           <input id="gi${i}" type="number" inputmode="numeric" placeholder="доход" value="${r.income == null ? "" : r.income}" style="flex:1">
           <input id="ge${i}" type="number" inputmode="numeric" placeholder="расход" value="${r.expense == null ? "" : r.expense}" style="flex:1">
           <input id="gs${i}" type="number" inputmode="numeric" placeholder="%" value="${Math.round((r.share == null ? 1 : r.share) * 100)}" style="width:52px">
-        </div></div>`).join("")}</div>
+        </div></div>`).join("");
+  const news = (window.__newDirs || []).map((r, k) => `<div style="margin-bottom:10px;border-bottom:1px solid var(--line,#eee);padding-bottom:8px">
+        <div style="display:flex;gap:8px;margin-bottom:4px">
+          <input id="gnn${k}" placeholder="название направления" value="${esc(r.name || "")}" style="flex:1;font-weight:700">
+          <span class="link" style="cursor:pointer;padding:6px" onclick="delNewDir(${k})">✕</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input id="gni${k}" type="number" inputmode="numeric" placeholder="доход" value="${r.income == null ? "" : r.income}" style="flex:1">
+          <input id="gne${k}" type="number" inputmode="numeric" placeholder="расход" value="${r.expense == null ? "" : r.expense}" style="flex:1">
+          <input id="gns${k}" type="number" inputmode="numeric" placeholder="%" value="${r.share == null ? 100 : r.share}" style="width:52px">
+        </div></div>`).join("");
+  el("create").innerHTML = `
+    <div class="sheet" style="max-height:85vh;overflow:auto">
+      <h3>Доход/расход за ${d.ym}</h3>
+      <div class="lbl" style="margin-bottom:8px">По направлению: доход и расход (₽), доля (%). Чистая = доход − расход.</div>
+      <div id="gform">${existing}${news}</div>
+      <button class="btn ghost" style="margin-top:8px" onclick="addDirRow()">＋ Добавить направление</button>
       <button class="btn red" style="margin-top:8px" onclick="saveGroupForm()">Сохранить</button>
       <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button>
     </div>`;
@@ -818,9 +896,20 @@ async function saveGroupForm() {
     const s = el("gs" + i) ? el("gs" + i).value : "";
     return { name: r.name, income: inc === "" ? null : Number(inc), expense: exp === "" ? null : Number(exp), share: s === "" ? 1 : Number(s) / 100 };
   });
+  (window.__newDirs || []).forEach((r, k) => {
+    const nm = el("gnn" + k) ? el("gnn" + k).value.trim() : (r.name || "").trim();
+    if (!nm) return;
+    const inc = el("gni" + k) ? el("gni" + k).value : "";
+    const exp = el("gne" + k) ? el("gne" + k).value : "";
+    const s = el("gns" + k) ? el("gns" + k).value : "";
+    rows.push({ name: nm, income: inc === "" ? null : Number(inc), expense: exp === "" ? null : Number(exp), share: s === "" ? 1 : Number(s) / 100 });
+  });
+  window.__newDirs = [];
   toast("Сохраняю…");
   const r = await API.groupSave(d.ym, rows);
-  closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось"); RENDER.group();
+  closeCreate(); toast(r && r.ok !== false ? "Сохранено ✓" : "Не удалось");
+  const _m = el("s-money");
+  if (_m && _m.classList.contains("on") && RENDER.money) { moneyYM = d.ym; RENDER.money(); } else RENDER.group();
 }
 
 /* ---- голос → текст ---- */
@@ -1248,9 +1337,21 @@ function hsLoad() {
   const seed = { reminders: [
       { id: "health-reminder-1", title: "Биохимия крови", type: "lab", frequencyDays: 180, nextDate: iso(12), comment: "Плановый контроль", status: "active" },
       { id: "health-reminder-2", title: "Check-up общий", type: "checkup", frequencyDays: 365, nextDate: iso(45), comment: "", status: "active" }
-    ], results: [], files: [], settings: { targetCheckupFrequencyDays: 180 } };
+    ], results: [], files: [], conclusions: [], profile: {}, settings: { targetCheckupFrequencyDays: 180 } };
   hsSave(seed); return seed;
 }
+/* профиль пользователя: пол/возраст/рост/вес/давление + ИМТ */
+function hsProfile() { const H = hsLoad(); return H.profile || {}; }
+function hsBMI(p) {
+  p = p || hsProfile();
+  const h = Number(p.height), w = Number(p.weight);
+  if (!h || !w) return null;
+  const b = w / Math.pow(h / 100, 2);
+  const cat = b < 18.5 ? "дефицит массы" : b < 25 ? "норма" : b < 30 ? "избыточная масса" : "ожирение";
+  const col = (b >= 18.5 && b < 25) ? "#1F9D55" : (b >= 25 && b < 30) ? "var(--amber,#E1A100)" : "var(--red)";
+  return { bmi: Math.round(b * 10) / 10, cat, col };
+}
+function hsProfileFilled() { const p = hsProfile(); return !!(p.sex || p.age || p.height || p.weight || p.bp_sys); }
 function hsUID(p) { return p + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000); }
 function daysLeft(iso) { const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(iso + "T00:00:00"); return Math.round((d - t) / 86400000); }
 function hsFmtD(iso) { return iso ? iso.split("-").reverse().join(".") : "—"; }
@@ -1345,6 +1446,150 @@ function hsHomeCard() {
     <div class="m">${att} показ. требуют внимания · анализы: ${hsFmtD(up)}</div></div>`;
 }
 
+/* ---- профиль: карточка, редактирование, сохранение ---- */
+function hsProfileCard() {
+  const p = hsProfile(); const bmi = hsBMI(p);
+  const chip = (label, val) => `<div style="background:#F7F7F5;border-radius:14px;padding:8px 12px;min-width:70px"><div class="lbl" style="font-size:10px">${label}</div><div style="font-weight:700;font-size:15px">${val || "—"}</div></div>`;
+  const bp = (p.bp_sys && p.bp_dia) ? `${p.bp_sys}/${p.bp_dia}` : "";
+  if (!hsProfileFilled()) {
+    return `<div class="card" style="border:1px dashed rgba(225,25,28,.35)">
+      <div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-user-heart" style="color:var(--red);margin-right:8px"></i>Мой профиль здоровья</div><button class="link" onclick="hsEditProfile()">Заполнить ›</button></div>
+      <div class="lbl" style="margin-top:6px">Заполни пол, возраст, рост, вес и давление — тогда ИИ будет разбирать анализы точнее (с учётом нормы для тебя).</div></div>`;
+  }
+  return `<div class="card">
+    <div class="row spread"><div class="t" style="font-weight:600"><i class="ti ti-user-heart" style="color:var(--red);margin-right:8px"></i>Мой профиль</div><button class="link" onclick="hsEditProfile()">Изменить</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${chip("Пол", p.sex === "m" ? "М" : p.sex === "f" ? "Ж" : "")}
+      ${chip("Возраст", p.age ? p.age + " лет" : "")}
+      ${chip("Рост", p.height ? p.height + " см" : "")}
+      ${chip("Вес", p.weight ? p.weight + " кг" : "")}
+      ${bmi ? `<div style="background:#F7F7F5;border-radius:14px;padding:8px 12px;min-width:70px"><div class="lbl" style="font-size:10px">ИМТ</div><div style="font-weight:700;font-size:15px;color:${bmi.col}">${bmi.bmi}</div><div class="lbl" style="font-size:9px;color:${bmi.col}">${bmi.cat}</div></div>` : ""}
+      ${chip("Давление", bp)}
+    </div></div>`;
+}
+function hsEditProfile() {
+  const p = hsProfile();
+  el("create").innerHTML = `<div class="sheet" style="max-height:85vh;overflow:auto"><h3>Профиль здоровья</h3>
+    <div class="lbl" style="margin-bottom:4px">Пол</div>
+    <div class="seg" id="pf_sex" style="margin-bottom:10px"><b data-v="m" class="${p.sex === "m" ? "on" : ""}">Мужской</b><b data-v="f" class="${p.sex === "f" ? "on" : ""}">Женский</b></div>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><div class="lbl" style="margin-bottom:4px">Возраст</div><input type="number" id="pf_age" value="${p.age || ""}" placeholder="лет"></div>
+      <div style="flex:1"><div class="lbl" style="margin-bottom:4px">Рост, см</div><input type="number" id="pf_h" value="${p.height || ""}" placeholder="см"></div>
+      <div style="flex:1"><div class="lbl" style="margin-bottom:4px">Вес, кг</div><input type="number" step="any" id="pf_w" value="${p.weight || ""}" placeholder="кг"></div>
+    </div>
+    <div class="lbl" style="margin:10px 0 4px">Давление (систолическое / диастолическое)</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="number" id="pf_bps" value="${p.bp_sys || ""}" placeholder="120" style="flex:1">
+      <span style="font-weight:700;color:var(--muted)">/</span>
+      <input type="number" id="pf_bpd" value="${p.bp_dia || ""}" placeholder="80" style="flex:1">
+    </div>
+    <button class="btn red" style="margin-top:14px" onclick="hsSaveProfile()">Сохранить</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+  document.querySelectorAll("#pf_sex b").forEach((b) => b.onclick = () => { document.querySelectorAll("#pf_sex b").forEach((x) => x.classList.remove("on")); b.classList.add("on"); });
+}
+function hsSaveProfile() {
+  const H = hsLoad(); const sel = document.querySelector("#pf_sex b.on");
+  H.profile = {
+    sex: sel ? sel.dataset.v : (H.profile && H.profile.sex) || "",
+    age: Number(el("pf_age").value) || "",
+    height: Number(el("pf_h").value) || "",
+    weight: Number(el("pf_w").value) || "",
+    bp_sys: Number(el("pf_bps").value) || "",
+    bp_dia: Number(el("pf_bpd").value) || "",
+    updated: new Date().toISOString().slice(0, 10)
+  };
+  hsSave(H); closeCreate(); toast("Профиль сохранён ✓"); RENDER.health();
+}
+
+/* ---- заключения врачей (фото/скан → текст, или вручную) ---- */
+function hsScanConclusion() {
+  _pickFile(async (f) => {
+    el("create").innerHTML = `<div class="sheet"><h3>Распознаю заключение…</h3><div class="lbl">ИИ читает документ — пара секунд.</div></div>`;
+    el("create").classList.remove("hidden");
+    const isImg = /^image\//.test(f.type || "");
+    const b64 = await _downscaleFile(f, 1800, 0.82);
+    const mime = isImg ? "image/jpeg" : (f.type || "application/pdf");
+    const fname = f.name || ("Заключение " + new Date().toLocaleDateString("ru"));
+    let fileMeta = null;
+    try { const up = await API.healthFilePut(fname, mime, b64); if (up && up.ok) fileMeta = { id: up.id, name: up.name, date: up.date, mime: up.mime }; } catch (e) {}
+    const r = await API.vision(b64, mime, "text");
+    const text = (r && r.ok && r.text) ? String(r.text).trim() : "";
+    if (fileMeta) { const H = hsLoad(); if (!(H.files || []).some((x) => x.id === fileMeta.id)) { H.files.push(fileMeta); hsSave(H); } }
+    if (!text) { closeCreate(); toast("Не удалось распознать" + (fileMeta ? " (файл сохранён)" : "")); return; }
+    hsConclusionConfirm(text, fileMeta);
+  });
+}
+function hsConclusionConfirm(text, fileMeta) {
+  el("create").innerHTML = `<div class="sheet" style="max-height:82vh;overflow:auto"><h3>Заключение врача</h3>
+    <div class="lbl" style="margin-bottom:4px">Дата</div>
+    <input type="date" id="cc_date" value="${new Date().toISOString().slice(0, 10)}" style="width:100%;margin-bottom:8px">
+    <div class="lbl" style="margin-bottom:4px">Текст (проверь и поправь)</div>
+    <textarea id="cc_text" style="width:100%;min-height:180px">${esc(text)}</textarea>
+    <button class="btn red" style="margin-top:12px" onclick="hsSaveConclusion('${(fileMeta && fileMeta.id) || ""}')">Сохранить</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsAddConclusion() { hsConclusionConfirm("", null); }
+function hsSaveConclusion(fileId) {
+  const H = hsLoad(); H.conclusions = H.conclusions || [];
+  const text = (el("cc_text").value || "").trim(); if (!text) { toast("Пусто"); return; }
+  H.conclusions.push({ id: hsUID("health-concl"), date: el("cc_date").value, text, fileId: fileId || "" });
+  hsSave(H); closeCreate(); toast("Заключение сохранено ✓"); hsOfferReport(); RENDER.health();
+}
+function hsDeleteConclusion(id) { const H = hsLoad(); H.conclusions = (H.conclusions || []).filter((c) => c.id !== id); hsSave(H); RENDER.health(); }
+
+/* ---- общий разбор здоровья (профиль + анализы + заключения) ---- */
+function hsBuildSummary() {
+  const H = hsLoad(); const p = hsProfile(); const bmi = hsBMI(p); const L = [];
+  const prof = [];
+  if (p.sex) prof.push("пол: " + (p.sex === "m" ? "мужской" : "женский"));
+  if (p.age) prof.push("возраст: " + p.age);
+  if (p.height) prof.push("рост: " + p.height + " см");
+  if (p.weight) prof.push("вес: " + p.weight + " кг");
+  if (bmi) prof.push("ИМТ: " + bmi.bmi + " (" + bmi.cat + ")");
+  if (p.bp_sys && p.bp_dia) prof.push("давление: " + p.bp_sys + "/" + p.bp_dia);
+  L.push("ПРОФИЛЬ: " + (prof.join(", ") || "не заполнен"));
+  const mk = [];
+  HS_MARKERS.forEach((m) => { const rows = hsLatest(m); if (rows.length) mk.push(`${m}: ${rows[0].value} ${rows[0].unit || ""} (${hsStatus(rows[0])}${rows.length >= 2 ? ", прошлое " + rows[1].value : ""}), норма ${hsRefText(rows[0]).replace("норма ", "")}`); });
+  H.results.slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 30).forEach((r) => { if (!HS_MARKERS.includes(r.marker)) mk.push(`${r.marker}: ${r.value} ${r.unit || ""} (${hsStatus(r)}) от ${r.date}`); });
+  L.push("ПОКАЗАТЕЛИ:\n" + (mk.length ? mk.join("\n") : "нет внесённых анализов"));
+  const cc = (H.conclusions || []).slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 6);
+  if (cc.length) L.push("ЗАКЛЮЧЕНИЯ ВРАЧЕЙ:\n" + cc.map((c) => `[${c.date}] ${c.text}`).join("\n---\n"));
+  const act = hsActive().map((r) => { const dl = daysLeft(r.nextDate); return `${r.title}: ${dl < 0 ? "просрочен " + (-dl) + "д" : "через " + dl + "д"}`; });
+  if (act.length) L.push("ЧЕКАПЫ: " + act.join("; "));
+  return L.join("\n\n");
+}
+async function hsFullReport() {
+  const summary = hsBuildSummary();
+  el("create").innerHTML = `<div class="sheet"><h3>ИИ разбирает здоровье…</h3><div class="lbl">Анализирую профиль, анализы и заключения — 5–10 секунд.</div></div>`;
+  el("create").classList.remove("hidden");
+  const r = await API.healthReport(summary);
+  if (!(r && r.ok !== false)) { closeCreate(); toast("Не вышло" + (r && r.error ? ": " + r.error : "")); return; }
+  try { const H = hsLoad(); H.lastReport = { date: new Date().toISOString().slice(0, 10), data: r }; hsSave(H); } catch (e) {}
+  hsShowReport(r);
+}
+function hsShowReport(r) {
+  const sect = (title, arr, icon, col) => (arr && arr.length) ? `<div class="sec-title" style="margin-top:12px">${icon} ${esc(title)}</div><div class="card" style="padding:6px 16px${col ? ";border-left:3px solid " + col : ""}">${arr.map((x) => `<div class="li"><div class="t">${esc(String(x))}</div></div>`).join("")}</div>` : "";
+  el("create").innerHTML = `<div class="sheet" style="max-height:86vh;overflow:auto"><h3>🩺 Общий разбор здоровья</h3>
+    ${r.overview ? `<div class="card"><div class="t">${esc(String(r.overview))}</div></div>` : ""}
+    ${sect("На что обратить внимание", r.red_flags, "⚠️", "var(--red)")}
+    ${sect("Что стоит проверить", r.possible, "🔍")}
+    ${sect("К каким врачам обратиться", r.doctors, "🩺")}
+    ${sect("Образ жизни", r.lifestyle, "🌿")}
+    ${sect("Когда пересдать / проверить", r.retest, "🔁")}
+    <div class="lbl" style="padding:10px 2px 4px">Это не диагноз и не назначение лечения — помощь в навигации. Решения принимает врач.</div>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Закрыть</button></div>`;
+  el("create").classList.remove("hidden");
+}
+function hsOfferReport() {
+  el("create").innerHTML = `<div class="sheet"><h3>Данные добавлены ✓</h3>
+    <div class="lbl" style="margin-bottom:12px">Сделать общий разбор здоровья с учётом новых данных — вывод, к каким врачам идти и что стоит проверить?</div>
+    <button class="btn red" onclick="hsFullReport()">🩺 Сделать разбор</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Позже</button></div>`;
+  el("create").classList.remove("hidden");
+}
+
 /* ---- экран «Здоровье» ---- */
 RENDER.health = function () {
   const H = hsLoad();
@@ -1399,8 +1644,12 @@ RENDER.health = function () {
   else if (lu && daysLeft(lu) < -180) sig.push("Анализы не обновлялись более 6 месяцев.");
   const analytics = sig.length ? `<div class="card" style="padding:6px 16px">${sig.map((s) => `<div class="li"><i class="ti ti-alert-triangle" style="color:var(--red)"></i><div class="t">${esc(s)}</div></div>`).join("")}</div>` : `<div class="card"><div class="lbl">Сейчас ничего критичного не вижу. Так держать 👍</div></div>`;
 
+  const lastRep = hsLoad().lastReport;
   el("s-health").innerHTML = `${back}<h1 class="h">Здоровье</h1>
     ${summary}
+    ${hsProfileCard()}
+    <button class="btn red" style="margin-top:6px" onclick="hsFullReport()"><i class="ti ti-stethoscope" style="margin-right:6px"></i>Общий разбор здоровья (ИИ)</button>
+    <div class="lbl" style="padding:4px 2px 2px">ИИ разберёт профиль, анализы и заключения врачей: общий вывод, что стоит проверить, к каким врачам обратиться.${lastRep ? " Последний разбор: " + hsFmtD(lastRep.date) + "." : ""}</div>
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Напоминания о чекапах</div><div><button onclick="hsImport()" style="background:none;border:none;color:var(--muted);font-weight:600;cursor:pointer;margin-right:10px">импорт</button><button onclick="hsAddReminder()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ добавить</button></div></div>
     ${remCards}
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Результаты анализов</div><button onclick="hsAddResult()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ показатель</button></div>
@@ -1408,10 +1657,12 @@ RENDER.health = function () {
     <button class="btn red" style="margin-top:10px" onclick="hsScanResults()"><i class="ti ti-camera" style="margin-right:6px"></i>Фото/скан анализов — ИИ распознает</button>
     <div class="lbl" style="padding:4px 2px 0">Сфотографируй бланк или загрузи PDF — ИИ вытащит показатели, ты проверишь и сохранишь. Сам файл сохранится на сервере.</div>
     ${fileList}
+    <div class="row spread" style="margin-top:16px"><div class="sec-title">Заключения врачей</div><button onclick="hsAddConclusion()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ текстом</button></div>
+    ${(function(){ const cc = (H.conclusions || []).slice().sort((a, b) => a.date < b.date ? 1 : -1); return cc.length ? `<div class="card" style="padding:6px 16px">${cc.map((c) => `<div class="li"><i class="ti ti-notes" style="color:var(--red)"></i><div class="t"><div style="font-weight:500">${hsFmtD(c.date)}</div><div class="m" style="white-space:pre-wrap">${esc(c.text.length > 220 ? c.text.slice(0,220) + "…" : c.text)}</div></div><button onclick="hsDeleteConclusion('${c.id}')" title="Удалить" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:#c0392b;cursor:pointer"><i class="ti ti-trash"></i></button></div>`).join("")}</div>` : `<div class="lbl" style="padding:2px 2px 0">Заключений пока нет.</div>`; })()}
+    <button class="btn ghost" style="margin-top:10px" onclick="hsScanConclusion()"><i class="ti ti-file-text" style="margin-right:6px"></i>Заключение врача — фото/скан</button>
     <div class="sec-title" style="margin-top:16px">Динамика показателей</div>
     <div class="lbl" style="padding:0 2px 4px">Нажми на показатель — откроется график с зоной нормы и всеми измерениями.</div>
     <div class="card" style="padding:6px 16px">${dyn}</div>
-    <button class="btn red" style="margin-top:16px" onclick="hsAdvice()"><i class="ti ti-sparkles" style="margin-right:6px"></i>Рекомендации ИИ (образ жизни, вопросы врачу, пересдача)</button>
     <div class="sec-title" style="margin-top:16px">Что требует внимания</div>
     ${analytics}
     <div class="lbl" style="padding:12px 2px 22px">Это не диагностика. Раздел помогает планировать чекапы и обсуждать показатели со специалистом. Отклонение от диапазона — повод обсудить с врачом, а не диагноз.</div>`;
@@ -1567,7 +1818,8 @@ function hsSaveExtract(n) {
     added++;
   }
   if (E.file && !(H.files || []).some((f) => f.id === E.file.id)) H.files.push(E.file);
-  hsSave(H); closeCreate(); toast(added ? ("Добавлено показателей: " + added) : "Ничего не выбрано"); RENDER.health();
+  hsSave(H); closeCreate(); toast(added ? ("Добавлено показателей: " + added) : "Ничего не выбрано");
+  if (added) hsOfferReport(); else RENDER.health();
 }
 async function hsOpenFile(id) {
   toast("Открываю…");

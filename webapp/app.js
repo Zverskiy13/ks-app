@@ -19,6 +19,9 @@ let curDay = new Date().toISOString().slice(0, 10);
 let viewYM = curDay.slice(0, 7);
 function shiftMonth(n) { let [y, m] = viewYM.split("-").map(Number); m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } viewYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.day(); }
 function pickDay(iso) { curDay = iso; viewYM = iso.slice(0, 7); RENDER.day(); }
+async function payToggle(id) { const r = await API.payrollToggle(curDay, id); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
+async function payAdd() { const nm = prompt("Фамилия или имя сотрудника:"); if (!nm || !nm.trim()) return; const r = await API.payrollRoster("add", { name: nm.trim() }); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
+async function payDel(id) { if (!confirm("Убрать сотрудника из списка зарплаты?")) return; const r = await API.payrollRoster("del", { id }); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
 function dayLabel(iso) { const d = new Date(iso); const t = new Date().toISOString().slice(0, 10); return (iso === t ? "Сегодня · " : "") + WD[d.getDay()] + " " + iso.slice(8, 10) + "." + iso.slice(5, 7); }
 
 /* ---------- PIN login ---------- */
@@ -156,6 +159,22 @@ const RENDER = {
     const mk = await API.month(viewYM);
     const marks = new Set(mk.dates || []);
     const status = mk.status || {};
+    // Блок зарплаты на 10 и 24 число
+    let payHTML = "";
+    const dnum = parseInt(curDay.slice(8, 10), 10);
+    if (dnum === 10 || dnum === 24) {
+      const pr = await API.payroll(curDay).catch(() => ({ roster: [], paid: {} }));
+      const roster = pr.roster || [], paid = pr.paid || {};
+      const paidCnt = roster.filter((e) => paid[e.id]).length;
+      const rows = roster.map((e) => {
+        const on = !!paid[e.id];
+        return `<div class="li" style="padding:6px 0"><span class="chk${on ? " done" : ""}" onclick="payToggle('${e.id}')" title="Выдал / не выдал"><span style="font-size:14px;font-weight:800">✓</span></span><span class="t" style="font-weight:500;${on ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(e.name)}</span><button onclick="payDel('${e.id}')" title="Убрать" style="border:none;background:none;color:#ccc;cursor:pointer;font-size:17px;line-height:1">×</button></div>`;
+      }).join("");
+      payHTML = `<div class="sec-title" style="margin-top:14px">💰 Зарплата — ${dnum} число (${paidCnt}/${roster.length})</div>
+        <div class="card" style="padding:6px 16px">${rows || `<div class="lbl" style="padding:12px 0">Список пуст — добавьте сотрудников</div>`}
+          <div style="padding:8px 0"><button onclick="payAdd()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ сотрудник</button></div>
+        </div>`;
+    }
     const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
     const [Y, M] = viewYM.split("-").map(Number);
     const startW = (new Date(Y, M - 1, 1).getDay() + 6) % 7;
@@ -189,6 +208,7 @@ const RENDER = {
         ${dd.items && dd.items.length ? dd.items.map((it, i) => `<div class="li"><span class="chk" onclick="dayItemDone(${i})" title="Выполнено"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t" style="font-weight:500;cursor:pointer" onclick="editItem(${i})">${esc(it.text)}${it.end ? ` <span class="lbl">до ${it.end}</span>` : ""}${it.recurring ? ` <span class="lbl" style="color:var(--red)" title="Повтор">🔁 ${esc(it.repeat_label || '')}</span>` : ""}</span><span style="color:#bbb;cursor:pointer;font-size:15px" onclick="editItem(${i})">✎</span></div>`).join("") : `<div class="lbl" style="padding:16px 0">На этот день пусто</div>`}
       </div>
       ${dd.free && dd.free.length ? `<div class="lbl" style="padding:2px 4px 14px">🟢 Свободно: ${dd.free.join(", ")}</div>` : ""}
+      ${payHTML}
       ${dd.done && dd.done.length ? `<div class="sec-title" style="margin-top:10px">✓ Выполнено в этот день (${dd.done.length})</div>
       <div class="card" style="padding:4px 16px">${dd.done.map((it, i) => `<div class="li"><span class="chk done"><span style="font-size:14px;font-weight:800">✓</span></span><span class="tcell">${it.start}</span><span class="t done-txt">${esc(it.text)}${it.recurring ? " 🔁" : ""}</span><button onclick="itemUndone(${i})" title="Вернуть в работу" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 10px;color:var(--red);cursor:pointer;font-size:15px">↩</button></div>`).join("")}</div>
       <div class="lbl" style="padding:4px 4px 0">↩ вернуть в работу — снять отметку и снова редактировать</div>` : ""}`;

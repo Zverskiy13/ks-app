@@ -58,6 +58,9 @@ const API = {
       .catch(() => (window.OFFLINE && OFFLINE.getDay(date)) || { items: [], done: [], free: [], offline: true });
   },
   group(profile, ym) { return _g(`group?ym=${encodeURIComponent(ym || "")}`); },
+  payroll(date) { return _g(`payroll?date=${encodeURIComponent(date || "")}`); },
+  payrollToggle(date, id) { return this._post("payroll/toggle", { date, id }); },
+  payrollRoster(action, p) { return this._post("payroll/roster", { action, ...(p || {}) }); },
   pvlReport(profile, days) { return _g(`pvl/report?days=${days || 7}`); },
   finAgg(profile, ym, mode, date) { return _g(`finance/agg?ym=${ym || ""}&mode=${mode || "month"}&date=${date || ""}`); },
   aggFixedSet(amount, ym, scope) { return this._post("finance/fixed", { amount, ym: ym || "", scope: scope || "default" }); },

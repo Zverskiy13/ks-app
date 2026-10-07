@@ -848,6 +848,52 @@ def deal_touch(b: Touch):
     return {"ok": gh_write("state/deals.json", json.dumps(deals, ensure_ascii=False, indent=2), "app: касание сделки")}
 
 
+# ---------- Зарплата (10 и 24 число): кому выдал / кому нет ----------
+class PayrollToggle(BaseModel):
+    date: str
+    id: str
+
+
+class RosterOp(BaseModel):
+    action: str          # "add" | "del"
+    name: str = ""
+    id: str = ""
+
+
+@app.get("/api/payroll")
+def payroll_get(date: str = "", user=Depends(current_user)):
+    roster = load_json("state/payroll_roster.json", [])
+    paid = load_json("state/payroll_paid.json", {})
+    return {"roster": roster, "paid": paid.get(date, {})}
+
+
+@app.post("/api/payroll/roster")
+def payroll_roster(b: RosterOp, user=Depends(require_owner)):
+    roster = load_json("state/payroll_roster.json", [])
+    if b.action == "add":
+        nm = (b.name or "").strip()
+        if nm:
+            nums = [int(x["id"][1:]) for x in roster if str(x.get("id", "e0"))[1:].isdigit()]
+            roster.append({"id": "e" + str((max(nums) if nums else 0) + 1), "name": nm})
+    elif b.action == "del":
+        roster = [x for x in roster if x.get("id") != b.id]
+    ok = gh_write("state/payroll_roster.json", json.dumps(roster, ensure_ascii=False, indent=2), "app: список зарплат")
+    return {"ok": ok, "roster": roster}
+
+
+@app.post("/api/payroll/toggle")
+def payroll_toggle(b: PayrollToggle, user=Depends(require_owner)):
+    paid = load_json("state/payroll_paid.json", {})
+    day = paid.get(b.date, {})
+    if day.get(b.id):
+        day.pop(b.id, None)          # снять отметку
+    else:
+        day[b.id] = True             # выдал
+    paid[b.date] = day
+    ok = gh_write("state/payroll_paid.json", json.dumps(paid, ensure_ascii=False, indent=2), "app: отметка зарплаты")
+    return {"ok": ok, "paid": paid.get(b.date, {})}
+
+
 @app.get("/api/deals")
 def deals(user=Depends(current_user)):
     profile = _prof(user)

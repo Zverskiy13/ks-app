@@ -109,6 +109,7 @@ function show(s) {
 }
 
 /* ---------- renderers ---------- */
+const APP_VERSION = "v69";
 const RENDER = {
   async home() {
     const H = await API.home(profile).catch(() => ({ agenda: [], deadlines: [], tasks: [] }));
@@ -122,7 +123,7 @@ const RENDER = {
     const aiSum = (AID && AID.digest && AID.digest.summary) ? AID.digest.summary : "";
     const directorText = aiSum ? esc(aiSum) : (top ? `Фокус дня — ${esc(top.text)}. ${hotDls ? `Горящих дедлайнов: ${hotDls}.` : "Критичных дедлайнов нет."}` : (hotDls ? `Нет главной задачи, но есть ${hotDls} горящих дедлайнов.` : "Критичных рисков на сегодня не вижу."));
     el("s-home").innerHTML = `
-      <div class="sub">${dateLabelToday()}</div>
+      <div class="sub">${dateLabelToday()} · <span style="color:#bbb">${APP_VERSION}</span></div>
       <h1 class="h">${profile.role === "owner" ? "Панель<br>управления" : "Привет,<br>" + profile.name.split(" ")[0]}</h1>
       ${profile.role === "owner" ? `<div class="director-note" onclick="show('assist')" style="cursor:pointer"><div class="k">ИИ-ПОМОЩНИК</div><div class="v">${directorText}</div><div class="link" style="margin-top:6px">Открыть помощника ›</div></div>
       <div class="board-pulse">

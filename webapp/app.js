@@ -109,7 +109,7 @@ function show(s) {
 }
 
 /* ---------- renderers ---------- */
-const APP_VERSION = "v69";
+const APP_VERSION = "v70";
 const RENDER = {
   async home() {
     const H = await API.home(profile).catch(() => ({ agenda: [], deadlines: [], tasks: [] }));
@@ -1465,7 +1465,10 @@ function hsProfileCard() {
       ${chip("Вес", p.weight ? p.weight + " кг" : "")}
       ${bmi ? `<div style="background:#F7F7F5;border-radius:14px;padding:8px 12px;min-width:70px"><div class="lbl" style="font-size:10px">ИМТ</div><div style="font-weight:700;font-size:15px;color:${bmi.col}">${bmi.bmi}</div><div class="lbl" style="font-size:9px;color:${bmi.col}">${bmi.cat}</div></div>` : ""}
       ${chip("Давление", bp)}
-    </div></div>`;
+      ${p.smoke ? chip("Курение", p.smoke === "no" ? "Нет" : p.smoke === "yes" ? "Да" : "Бросил") : ""}
+      ${p.alco ? chip("Алкоголь", p.alco === "no" ? "Нет" : p.alco === "some" ? "Иногда" : p.alco === "often" ? "Регул." : "Бросил") : ""}
+    </div>
+    ${p.meds ? `<div class="lbl" style="margin-top:10px"><i class="ti ti-pill" style="color:var(--red);margin-right:4px"></i>Лекарства/терапия: <span style="color:#333">${esc(p.meds)}</span></div>` : ""}</div>`;
 }
 function hsEditProfile() {
   const p = hsProfile();
@@ -1483,20 +1486,32 @@ function hsEditProfile() {
       <span style="font-weight:700;color:var(--muted)">/</span>
       <input type="number" id="pf_bpd" value="${p.bp_dia || ""}" placeholder="80" style="flex:1">
     </div>
+    <div class="lbl" style="margin:12px 0 4px">Курение</div>
+    <div class="seg" id="pf_smoke"><b data-v="no" class="${p.smoke === "no" ? "on" : ""}" onclick="segPick(this)">Не курю</b><b data-v="yes" class="${p.smoke === "yes" ? "on" : ""}" onclick="segPick(this)">Курю</b><b data-v="quit" class="${p.smoke === "quit" ? "on" : ""}" onclick="segPick(this)">Бросил</b></div>
+    <div class="lbl" style="margin:10px 0 4px">Алкоголь</div>
+    <div class="seg" id="pf_alco"><b data-v="no" class="${p.alco === "no" ? "on" : ""}" onclick="segPick(this)">Не пью</b><b data-v="some" class="${p.alco === "some" ? "on" : ""}" onclick="segPick(this)">Иногда</b><b data-v="often" class="${p.alco === "often" ? "on" : ""}" onclick="segPick(this)">Регулярно</b><b data-v="quit" class="${p.alco === "quit" ? "on" : ""}" onclick="segPick(this)">Бросил</b></div>
+    <div class="lbl" style="margin:12px 0 4px">Принимаемые лекарства / терапия (напр. ГЗТ, дозировки)</div>
+    <textarea id="pf_meds" style="width:100%;min-height:72px" placeholder="Например: ГЗТ — тестостерон ... ; витамин D 5000 МЕ; ...">${esc(p.meds || "")}</textarea>
     <button class="btn red" style="margin-top:14px" onclick="hsSaveProfile()">Сохранить</button>
     <button class="btn ghost" style="margin-top:8px" onclick="closeCreate()">Отмена</button></div>`;
   el("create").classList.remove("hidden");
   document.querySelectorAll("#pf_sex b").forEach((b) => b.onclick = () => { document.querySelectorAll("#pf_sex b").forEach((x) => x.classList.remove("on")); b.classList.add("on"); });
 }
+function segPick(btn) { btn.parentNode.querySelectorAll("b").forEach((x) => x.classList.remove("on")); btn.classList.add("on"); }
 function hsSaveProfile() {
   const H = hsLoad(); const sel = document.querySelector("#pf_sex b.on");
+  const sm = document.querySelector("#pf_smoke b.on"), al = document.querySelector("#pf_alco b.on");
+  const prev = H.profile || {};
   H.profile = {
-    sex: sel ? sel.dataset.v : (H.profile && H.profile.sex) || "",
+    sex: sel ? sel.dataset.v : prev.sex || "",
     age: Number(el("pf_age").value) || "",
     height: Number(el("pf_h").value) || "",
     weight: Number(el("pf_w").value) || "",
     bp_sys: Number(el("pf_bps").value) || "",
     bp_dia: Number(el("pf_bpd").value) || "",
+    smoke: sm ? sm.dataset.v : prev.smoke || "",
+    alco: al ? al.dataset.v : prev.alco || "",
+    meds: (el("pf_meds") && el("pf_meds").value.trim()) || "",
     updated: new Date().toISOString().slice(0, 10)
   };
   hsSave(H); closeCreate(); toast("Профиль сохранён ✓"); RENDER.health();
@@ -1550,14 +1565,29 @@ function hsBuildSummary() {
   if (bmi) prof.push("ИМТ: " + bmi.bmi + " (" + bmi.cat + ")");
   if (p.bp_sys && p.bp_dia) prof.push("давление: " + p.bp_sys + "/" + p.bp_dia);
   L.push("ПРОФИЛЬ: " + (prof.join(", ") || "не заполнен"));
+  const habitTxt = [];
+  if (p.smoke) habitTxt.push("курение: " + (p.smoke === "no" ? "нет" : p.smoke === "yes" ? "да" : "бросил"));
+  if (p.alco) habitTxt.push("алкоголь: " + (p.alco === "no" ? "не употребляет" : p.alco === "some" ? "иногда" : p.alco === "often" ? "регулярно" : "бросил"));
+  if (habitTxt.length) L.push("ПРИВЫЧКИ: " + habitTxt.join(", "));
+  if (p.meds) L.push("ПРИНИМАЕМЫЕ ЛЕКАРСТВА/ТЕРАПИЯ: " + p.meds);
   const mk = [];
-  HS_MARKERS.forEach((m) => { const rows = hsLatest(m); if (rows.length) mk.push(`${m}: ${rows[0].value} ${rows[0].unit || ""} (${hsStatus(rows[0])}${rows.length >= 2 ? ", прошлое " + rows[1].value : ""}), норма ${hsRefText(rows[0]).replace("норма ", "")}`); });
-  H.results.slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 30).forEach((r) => { if (!HS_MARKERS.includes(r.marker)) mk.push(`${r.marker}: ${r.value} ${r.unit || ""} (${hsStatus(r)}) от ${r.date}`); });
-  L.push("ПОКАЗАТЕЛИ:\n" + (mk.length ? mk.join("\n") : "нет внесённых анализов"));
+  const allM = Array.from(new Set([...HS_MARKERS, ...H.results.map((r) => r.marker)])).filter(Boolean);
+  allM.forEach((m) => {
+    const rows = hsLatest(m); if (!rows.length) return;
+    const hist = rows.slice(0, 6).map((r) => `${r.value}${r.unit ? " " + r.unit : ""} (${hsFmtD(r.date)})`).join(" ← ");
+    mk.push(`${m}: сейчас ${rows[0].value} ${rows[0].unit || ""} — ${hsStatus(rows[0])}; норма ${hsRefText(rows[0]).replace("норма ", "")}; история (новое→старое): ${hist}`);
+  });
+  L.push("ПОКАЗАТЕЛИ И ИХ ДИНАМИКА:\n" + (mk.length ? mk.join("\n") : "нет внесённых анализов"));
   const cc = (H.conclusions || []).slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 6);
   if (cc.length) L.push("ЗАКЛЮЧЕНИЯ ВРАЧЕЙ:\n" + cc.map((c) => `[${c.date}] ${c.text}`).join("\n---\n"));
   const act = hsActive().map((r) => { const dl = daysLeft(r.nextDate); return `${r.title}: ${dl < 0 ? "просрочен " + (-dl) + "д" : "через " + dl + "д"}`; });
   if (act.length) L.push("ЧЕКАПЫ: " + act.join("; "));
+  if (H.lastReport && H.lastReport.data) {
+    const d = H.lastReport.data, rp = [];
+    if (d.overview) rp.push("Вывод: " + d.overview);
+    [["dynamics", "динамика"], ["red_flags", "внимание"], ["possible", "проверить"], ["doctors", "врачи"], ["lifestyle", "образ жизни"], ["retest", "пересдать"]].forEach(([k, lbl]) => { if (Array.isArray(d[k]) && d[k].length) rp.push(lbl + ": " + d[k].join("; ")); });
+    L.push("ПРЕДЫДУЩИЙ РАЗБОР ИИ (" + H.lastReport.date + ") — сравни с ним и опиши динамику:\n" + rp.join("\n"));
+  }
   return L.join("\n\n");
 }
 async function hsFullReport() {
@@ -1566,19 +1596,43 @@ async function hsFullReport() {
   el("create").classList.remove("hidden");
   const r = await API.healthReport(summary);
   if (!(r && r.ok !== false)) { closeCreate(); toast("Не вышло" + (r && r.error ? ": " + r.error : "")); return; }
-  try { const H = hsLoad(); H.lastReport = { date: new Date().toISOString().slice(0, 10), data: r }; hsSave(H); } catch (e) {}
+  try { const H = hsLoad(); const rec = { date: new Date().toISOString().slice(0, 10), data: r }; H.lastReport = rec; H.reports = H.reports || []; H.reports.push(rec); if (H.reports.length > 20) H.reports = H.reports.slice(-20); hsSave(H); } catch (e) {}
   hsShowReport(r);
+}
+function hsReportMarkdown(r, date) {
+  const L = ["# Разбор здоровья — " + hsFmtD(date), ""];
+  if (r.overview) L.push(String(r.overview), "");
+  const sec = (title, arr) => { if (Array.isArray(arr) && arr.length) { L.push("## " + title); arr.forEach((x) => L.push("- " + String(x))); L.push(""); } };
+  sec("Динамика с прошлого разбора", r.dynamics);
+  sec("На что обратить внимание", r.red_flags);
+  sec("Что стоит проверить", r.possible);
+  sec("К каким врачам обратиться", r.doctors);
+  sec("Образ жизни", r.lifestyle);
+  sec("Когда пересдать / проверить", r.retest);
+  L.push("---", "Это не диагноз и не назначение лечения — помощь в навигации. Решения принимает врач.");
+  return L.join("\n");
+}
+function hsDownloadLastReport() {
+  const H = hsLoad(); const rep = H.lastReport; if (!rep) { toast("Нет разбора"); return; }
+  const md = hsReportMarkdown(rep.data, rep.date);
+  try {
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const u = URL.createObjectURL(blob); const a = document.createElement("a");
+    a.href = u; a.download = "Разбор_здоровья_" + rep.date + ".md"; a.click(); URL.revokeObjectURL(u);
+  } catch (e) { toast("Не удалось скачать"); }
 }
 function hsShowReport(r) {
   const sect = (title, arr, icon, col) => (arr && arr.length) ? `<div class="sec-title" style="margin-top:12px">${icon} ${esc(title)}</div><div class="card" style="padding:6px 16px${col ? ";border-left:3px solid " + col : ""}">${arr.map((x) => `<div class="li"><div class="t">${esc(String(x))}</div></div>`).join("")}</div>` : "";
   el("create").innerHTML = `<div class="sheet" style="max-height:86vh;overflow:auto"><h3>🩺 Общий разбор здоровья</h3>
     ${r.overview ? `<div class="card"><div class="t">${esc(String(r.overview))}</div></div>` : ""}
+    ${sect("Динамика с прошлого разбора", r.dynamics, "📈", "#2E5496")}
     ${sect("На что обратить внимание", r.red_flags, "⚠️", "var(--red)")}
     ${sect("Что стоит проверить", r.possible, "🔍")}
     ${sect("К каким врачам обратиться", r.doctors, "🩺")}
     ${sect("Образ жизни", r.lifestyle, "🌿")}
     ${sect("Когда пересдать / проверить", r.retest, "🔁")}
     <div class="lbl" style="padding:10px 2px 4px">Это не диагноз и не назначение лечения — помощь в навигации. Решения принимает врач.</div>
+    <button class="btn red" style="margin-top:8px" onclick="hsDownloadLastReport()"><i class="ti ti-download" style="margin-right:6px"></i>Скачать разбор (файл)</button>
     <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Закрыть</button></div>`;
   el("create").classList.remove("hidden");
 }
@@ -1622,14 +1676,15 @@ RENDER.health = function () {
 
   const fileList = H.files.length ? `<div class="card" style="padding:6px 16px">${H.files.slice().reverse().map((f) => `<div class="li"><i class="ti ti-file-text" style="color:var(--red)"></i><div class="t" style="cursor:pointer" onclick="hsOpenFile('${f.id}')"><div style="font-weight:500">${esc(f.name)}</div><div class="m">${hsFmtD(f.date)} · нажми, чтобы открыть</div></div><button onclick="hsOpenFile('${f.id}')" title="Открыть" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-eye"></i></button><button onclick="hsDeleteFile('${f.id}')" title="Удалить" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:#c0392b;cursor:pointer;margin-left:4px"><i class="ti ti-trash"></i></button></div>`).join("")}</div>` : "";
 
-  const dyn = HS_MARKERS.map((m) => {
+  const allMarkers = Array.from(new Set([...HS_MARKERS, ...H.results.map((r) => r.marker)])).filter(Boolean);
+  const dyn = allMarkers.map((m) => {
     const rows = hsLatest(m);
-    if (!rows.length) return `<div class="li"><div class="t"><div style="font-weight:600">${m}</div><div class="m">нет данных</div></div><span class="badge" style="color:#9ca3af;border-color:#e5e7eb">—</span></div>`;
+    if (!rows.length) return HS_MARKERS.includes(m) ? `<div class="li"><div class="t"><div style="font-weight:600">${m}</div><div class="m">нет данных</div></div><span class="badge" style="color:#9ca3af;border-color:#e5e7eb">—</span></div>` : "";
     const last = rows[0], s = hsStatus(last);
     const trend = rows.length >= 2 ? (Number(rows[0].value) > Number(rows[1].value) ? "растёт" : Number(rows[0].value) < Number(rows[1].value) ? "снижается" : "стабильно") : "—";
     const col = (s === "выше" || s === "ниже") ? "var(--red)" : s === "в диапазоне" ? "#1F9D55" : "#9ca3af";
-    return `<div class="li" onclick="hsOpenChart('${m.replace(/'/g, "\\'")}')" style="cursor:pointer"><div class="t"><div style="font-weight:600">${m} <i class="ti ti-chart-line" style="color:#ccc;font-size:13px"></i></div><div class="m">${last.value} ${esc(last.unit || "")} · ${hsFmtD(last.date)} · ${trend}</div></div><div style="text-align:right">${hsSpark(rows.slice(0, 6).reverse())}<div class="m" style="color:${col}">${s}</div></div></div>`;
-  }).join("");
+    return `<div class="li" onclick="hsOpenChart('${String(m).replace(/'/g, "\\'")}')" style="cursor:pointer"><div class="t"><div style="font-weight:600">${esc(m)} <i class="ti ti-chart-line" style="color:#ccc;font-size:13px"></i></div><div class="m">${last.value} ${esc(last.unit || "")} · ${hsFmtD(last.date)} · ${trend}</div></div><div style="text-align:right">${hsSpark(rows.slice(0, 6).reverse())}<div class="m" style="color:${col}">${s}</div></div></div>`;
+  }).filter(Boolean).join("");
 
   const sig = [];
   HS_MARKERS.forEach((m) => {

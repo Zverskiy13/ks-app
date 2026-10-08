@@ -20,8 +20,19 @@ let viewYM = curDay.slice(0, 7);
 function shiftMonth(n) { let [y, m] = viewYM.split("-").map(Number); m += n; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } viewYM = `${y}-${String(m).padStart(2, "0")}`; RENDER.day(); }
 function pickDay(iso) { curDay = iso; viewYM = iso.slice(0, 7); RENDER.day(); }
 async function payToggle(id) { const r = await API.payrollToggle(curDay, id); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
-async function payAdd() { const nm = prompt("Фамилия или имя сотрудника:"); if (!nm || !nm.trim()) return; const r = await API.payrollRoster("add", { name: nm.trim() }); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
-async function payDel(id) { if (!confirm("Убрать сотрудника из списка зарплаты?")) return; const r = await API.payrollRoster("del", { id }); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
+async function payAdd() {
+  const nm = prompt("Фамилия или имя сотрудника:"); if (!nm || !nm.trim()) return;
+  const a = prompt("Сумма зарплаты, ₽:", ""); const amount = parseInt((a || "").replace(/\D/g, ""), 10) || 0;
+  const r = await API.payrollRoster("add", { name: nm.trim(), amount, date: curDay });
+  if (r && r.ok !== false) RENDER.day(); else toast("Не удалось");
+}
+async function payDel(id) { if (!confirm("Убрать сотрудника из списка зарплаты?\nИзменение затронет эту дату и все будущие периоды, прошлые останутся как были.")) return; const r = await API.payrollRoster("del", { id, date: curDay }); if (r && r.ok !== false) RENDER.day(); else toast("Не удалось"); }
+async function paySetAmount(id, cur) {
+  const a = prompt("Сумма зарплаты, ₽:", cur || ""); if (a === null) return;
+  const amount = parseInt((a || "").replace(/\D/g, ""), 10) || 0;
+  const r = await API.payrollRoster("setamount", { id, amount, date: curDay });
+  if (r && r.ok !== false) RENDER.day(); else toast("Не удалось");
+}
 function dayLabel(iso) { const d = new Date(iso); const t = new Date().toISOString().slice(0, 10); return (iso === t ? "Сегодня · " : "") + WD[d.getDay()] + " " + iso.slice(8, 10) + "." + iso.slice(5, 7); }
 
 /* ---------- PIN login ---------- */
@@ -109,7 +120,7 @@ function show(s) {
 }
 
 /* ---------- renderers ---------- */
-const APP_VERSION = "v70";
+const APP_VERSION = "v71";
 const RENDER = {
   async home() {
     const H = await API.home(profile).catch(() => ({ agenda: [], deadlines: [], tasks: [] }));
@@ -167,14 +178,20 @@ const RENDER = {
       const pr = await API.payroll(curDay).catch(() => ({ roster: [], paid: {} }));
       const roster = pr.roster || [], paid = pr.paid || {};
       const paidCnt = roster.filter((e) => paid[e.id]).length;
+      const money = (n) => Number(n || 0).toLocaleString("ru-RU") + " ₽";
+      const total = roster.reduce((s, e) => s + Number(e.amount || 0), 0);
+      const paidSum = roster.filter((e) => paid[e.id]).reduce((s, e) => s + Number(e.amount || 0), 0);
       const rows = roster.map((e) => {
         const on = !!paid[e.id];
-        return `<div class="li" style="padding:6px 0"><span class="chk${on ? " done" : ""}" onclick="payToggle('${e.id}')" title="Выдал / не выдал"><span style="font-size:14px;font-weight:800">✓</span></span><span class="t" style="font-weight:500;${on ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(e.name)}</span><button onclick="payDel('${e.id}')" title="Убрать" style="border:none;background:none;color:#ccc;cursor:pointer;font-size:17px;line-height:1">×</button></div>`;
+        const amt = Number(e.amount || 0);
+        return `<div class="li" style="padding:6px 0"><span class="chk${on ? " done" : ""}" onclick="payToggle('${e.id}')" title="Выдал / не выдал"><span style="font-size:14px;font-weight:800">✓</span></span><span class="t" style="font-weight:500;${on ? "color:var(--muted);text-decoration:line-through" : ""}">${esc(e.name)}</span><span onclick="paySetAmount('${e.id}', ${amt})" title="Изменить сумму" style="cursor:pointer;font-weight:700;white-space:nowrap;${on ? "color:var(--muted)" : ""}">${amt ? money(amt) : "— ₽"}</span><button onclick="payDel('${e.id}')" title="Убрать" style="border:none;background:none;color:#ccc;cursor:pointer;font-size:17px;line-height:1">×</button></div>`;
       }).join("");
       payHTML = `<div class="sec-title" style="margin-top:14px">💰 Зарплата — ${dnum} число (${paidCnt}/${roster.length})</div>
-        <div class="card" style="padding:6px 16px">${rows || `<div class="lbl" style="padding:12px 0">Список пуст — добавьте сотрудников</div>`}
+        <div class="card" style="padding:6px 16px">${rows || `<div class="lbl" style="padding:12px 0">Список пуст — добавьте сотрудников и суммы</div>`}
+          ${roster.length ? `<div class="row spread" style="padding:9px 2px;border-top:1px solid var(--line)"><span style="font-weight:700">Итого выдано / план</span><span style="font-weight:800;white-space:nowrap">${money(paidSum)} / ${money(total)}</span></div>` : ""}
           <div style="padding:8px 0"><button onclick="payAdd()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ сотрудник</button></div>
-        </div>`;
+        </div>
+        <div class="lbl" style="padding:4px 4px 0">Цифры тиражируются на все будущие периоды. Правка на эту дату меняет её и последующие — прошлые остаются как были.</div>`;
     }
     const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
     const [Y, M] = viewYM.split("-").map(Number);

@@ -855,30 +855,77 @@ class PayrollToggle(BaseModel):
 
 
 class RosterOp(BaseModel):
-    action: str          # "add" | "del"
+    action: str          # "add" | "del" | "setamount"
     name: str = ""
     id: str = ""
+    amount: int = 0
+    date: str = ""       # дата-точка правки: действует на неё и все будущие периоды
+
+
+def _load_payroll():
+    """Версионный список зарплат: {"versions":[{"from":ISO,"rows":[{id,name,amount}]}]}.
+       Старый плоский формат (просто список сотрудников) конвертируем на лету."""
+    data = load_json("state/payroll_roster.json", {"versions": []})
+    if isinstance(data, list):
+        data = {"versions": ([{"from": "", "rows": [
+            {"id": x.get("id"), "name": x.get("name", ""), "amount": int(x.get("amount", 0) or 0)}
+            for x in data]}] if data else [])}
+    vs = data.get("versions", []) or []
+    for v in vs:
+        for r in v.get("rows", []):
+            r["amount"] = int(r.get("amount", 0) or 0)
+    vs.sort(key=lambda v: v.get("from", ""))
+    data["versions"] = vs
+    return data
+
+
+def _eff_version(data, date):
+    """Версия, действующая на дату: последняя с from <= date."""
+    eff = None
+    for v in data["versions"]:
+        if v.get("from", "") <= date:
+            eff = v
+    return eff
 
 
 @app.get("/api/payroll")
 def payroll_get(date: str = "", user=Depends(current_user)):
-    roster = load_json("state/payroll_roster.json", [])
+    data = _load_payroll()
+    eff = _eff_version(data, date)
+    rows = [dict(r) for r in (eff.get("rows", []) if eff else [])]
     paid = load_json("state/payroll_paid.json", {})
-    return {"roster": roster, "paid": paid.get(date, {})}
+    return {"roster": rows, "paid": paid.get(date, {}), "eff_from": (eff or {}).get("from", "")}
 
 
 @app.post("/api/payroll/roster")
 def payroll_roster(b: RosterOp, user=Depends(require_owner)):
-    roster = load_json("state/payroll_roster.json", [])
+    data = _load_payroll()
+    date = (b.date or "").strip()
+    if not date:
+        return {"ok": False, "reason": "no date"}
+    # найти/создать версию-точку ровно на эту дату, склонировав действующую на неё
+    ver = next((v for v in data["versions"] if v.get("from") == date), None)
+    if ver is None:
+        base = _eff_version(data, date)
+        ver = {"from": date, "rows": [dict(r) for r in (base.get("rows", []) if base else [])]}
+        data["versions"].append(ver)
+    rows = ver["rows"]
     if b.action == "add":
         nm = (b.name or "").strip()
         if nm:
-            nums = [int(x["id"][1:]) for x in roster if str(x.get("id", "e0"))[1:].isdigit()]
-            roster.append({"id": "e" + str((max(nums) if nums else 0) + 1), "name": nm})
+            nums = [int(str(x.get("id", "e0"))[1:]) for v in data["versions"]
+                    for x in v.get("rows", []) if str(x.get("id", "e0"))[1:].isdigit()]
+            rows.append({"id": "e" + str((max(nums) if nums else 0) + 1), "name": nm, "amount": int(b.amount or 0)})
     elif b.action == "del":
-        roster = [x for x in roster if x.get("id") != b.id]
-    ok = gh_write("state/payroll_roster.json", json.dumps(roster, ensure_ascii=False, indent=2), "app: список зарплат")
-    return {"ok": ok, "roster": roster}
+        ver["rows"] = [x for x in rows if x.get("id") != b.id]
+    elif b.action == "setamount":
+        for x in rows:
+            if x.get("id") == b.id:
+                x["amount"] = int(b.amount or 0)
+    data["versions"].sort(key=lambda v: v.get("from", ""))
+    ok = gh_write("state/payroll_roster.json", json.dumps(data, ensure_ascii=False, indent=2), "app: список зарплат")
+    eff = _eff_version(data, date)
+    return {"ok": ok, "roster": (eff.get("rows", []) if eff else [])}
 
 
 @app.post("/api/payroll/toggle")

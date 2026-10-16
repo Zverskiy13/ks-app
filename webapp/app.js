@@ -120,7 +120,7 @@ function show(s) {
 }
 
 /* ---------- renderers ---------- */
-const APP_VERSION = "v71";
+const APP_VERSION = "v72";
 const RENDER = {
   async home() {
     const H = await API.home(profile).catch(() => ({ agenda: [], deadlines: [], tasks: [] }));
@@ -1566,7 +1566,9 @@ function hsAddConclusion() { hsConclusionConfirm("", null); }
 function hsSaveConclusion(fileId) {
   const H = hsLoad(); H.conclusions = H.conclusions || [];
   const text = (el("cc_text").value || "").trim(); if (!text) { toast("Пусто"); return; }
-  H.conclusions.push({ id: hsUID("health-concl"), date: el("cc_date").value, text, fileId: fileId || "" });
+  const cdate = el("cc_date").value;
+  H.conclusions.push({ id: hsUID("health-concl"), date: cdate, text, fileId: fileId || "" });
+  H.archive = H.archive || []; H.archive.push({ id: hsUID("arc"), cat: "consult", date: cdate, title: "Заключение врача", provider: "", fileId: fileId || "", text });
   hsSave(H); closeCreate(); toast("Заключение сохранено ✓"); hsOfferReport(); RENDER.health();
 }
 function hsDeleteConclusion(id) { const H = hsLoad(); H.conclusions = (H.conclusions || []).filter((c) => c.id !== id); hsSave(H); RENDER.health(); }
@@ -1595,8 +1597,12 @@ function hsBuildSummary() {
     mk.push(`${m}: сейчас ${rows[0].value} ${rows[0].unit || ""} — ${hsStatus(rows[0])}; норма ${hsRefText(rows[0]).replace("норма ", "")}; история (новое→старое): ${hist}`);
   });
   L.push("ПОКАЗАТЕЛИ И ИХ ДИНАМИКА:\n" + (mk.length ? mk.join("\n") : "нет внесённых анализов"));
-  const cc = (H.conclusions || []).slice().sort((a, b) => a.date < b.date ? 1 : -1).slice(0, 6);
-  if (cc.length) L.push("ЗАКЛЮЧЕНИЯ ВРАЧЕЙ:\n" + cc.map((c) => `[${c.date}] ${c.text}`).join("\n---\n"));
+  const arc = (H.archive || []);
+  const byDate = (a, b) => a.date < b.date ? 1 : -1;
+  const consults = arc.filter((a) => a.cat === "consult").sort(byDate).slice(0, 8);
+  if (consults.length) L.push("КОНСУЛЬТАЦИИ И ЗАКЛЮЧЕНИЯ ВРАЧЕЙ:\n" + consults.map((c) => `[${c.date}] ${c.title}${c.provider ? " (" + c.provider + ")" : ""}: ${c.text || "—"}`).join("\n---\n"));
+  const imaging = arc.filter((a) => a.cat === "imaging").sort(byDate).slice(0, 8);
+  if (imaging.length) L.push("АППАРАТНАЯ ДИАГНОСТИКА (УЗИ/ЭКГ/рентген/МРТ и т.п.):\n" + imaging.map((c) => `[${c.date}] ${c.title}${c.provider ? " (" + c.provider + ")" : ""}: ${c.text || "—"}`).join("\n---\n"));
   const act = hsActive().map((r) => { const dl = daysLeft(r.nextDate); return `${r.title}: ${dl < 0 ? "просрочен " + (-dl) + "д" : "через " + dl + "д"}`; });
   if (act.length) L.push("ЧЕКАПЫ: " + act.join("; "));
   if (H.lastReport && H.lastReport.data) {
@@ -1661,8 +1667,139 @@ function hsOfferReport() {
   el("create").classList.remove("hidden");
 }
 
+/* ===== Медицинский архив (ЭМК): категории, автосортировка, поиск ===== */
+const HS_CATS = {
+  labs:    { t: "Анализы",                i: "ti-test-pipe",   c: "#2E7D32" },
+  imaging: { t: "Аппаратная диагностика", i: "ti-activity-heartbeat", c: "#2E5496" },
+  consult: { t: "Консультации врачей",    i: "ti-stethoscope", c: "#C0392B" },
+};
+function hsCat(c) { return HS_CATS[c] || HS_CATS.consult; }
+function hsArchList() { const H = hsLoad(); if (!H.archive) H.archive = []; return H; }
+/* единоразовый перенос старых заключений и файлов в единый архив */
+function hsMigrateArchive() {
+  const H = hsLoad(); if (H._archv) return; H.archive = H.archive || [];
+  (H.conclusions || []).forEach((c) => {
+    if (!H.archive.some((a) => a.srcId === c.id))
+      H.archive.push({ id: hsUID("arc"), srcId: c.id, cat: "consult", date: c.date, title: "Заключение врача", provider: "", fileId: c.fileId || "", text: c.text || "" });
+  });
+  const inArch = new Set(H.archive.map((a) => a.fileId).filter(Boolean));
+  (H.files || []).forEach((f) => {
+    if (!inArch.has(f.id)) H.archive.push({ id: hsUID("arc"), cat: "labs", date: f.date, title: f.name || "Документ", provider: "", fileId: f.id, text: "" });
+  });
+  H._archv = 1; hsSave(H);
+}
+/* фильтры (на уровне окна, чтобы поиск не терял фокус) */
+window.hsAF = window.hsAF || "all"; window.hsAQ = window.hsAQ || ""; window.hsAFrom = window.hsAFrom || ""; window.hsATo = window.hsATo || "";
+function hsArchFiltered(H) {
+  let a = (H.archive || []).slice();
+  if (window.hsAF !== "all") a = a.filter((x) => x.cat === window.hsAF);
+  const q = window.hsAQ; if (q) a = a.filter((x) => ((x.title || "") + " " + (x.provider || "") + " " + (x.text || "")).toLowerCase().includes(q));
+  if (window.hsAFrom) a = a.filter((x) => (x.date || "") >= window.hsAFrom);
+  if (window.hsATo) a = a.filter((x) => (x.date || "") <= window.hsATo);
+  a.sort((x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : 0));
+  return a;
+}
+function hsArchItems(H) {
+  const a = hsArchFiltered(H);
+  if (!a.length) return `<div class="lbl" style="padding:12px 2px">Ничего не найдено. Загрузите документ кнопкой «＋ Добавить документ».</div>`;
+  return `<div class="card" style="padding:6px 16px">${a.map((x) => { const cc = hsCat(x.cat); const sub = x.text ? (x.text.length > 72 ? x.text.slice(0, 72) + "…" : x.text) : ""; return `<div class="li"><i class="ti ${cc.i}" style="color:${cc.c}"></i><div class="t" style="cursor:pointer" onclick="hsEditDoc('${x.id}')"><div style="font-weight:600">${esc(x.title)}</div><div class="m">${hsFmtD(x.date)} · <span style="color:${cc.c}">${cc.t}</span>${x.provider ? " · " + esc(x.provider) : ""}${sub ? " · " + esc(sub) : ""}</div></div>${x.fileId ? `<button onclick="hsOpenFile('${x.fileId}')" title="Открыть" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-eye"></i></button>` : ""}<button onclick="hsEditDoc('${x.id}')" title="Изменить" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:#888;cursor:pointer;margin-left:4px"><i class="ti ti-edit"></i></button></div>`; }).join("")}</div>`;
+}
+function hsArchRefresh() { const H = hsLoad(); const l = document.getElementById("hs_arch_list"); if (l) l.innerHTML = hsArchItems(H); }
+function hsSetAF(c) { window.hsAF = c; RENDER.health(); }
+function hsArchQInput(v) { window.hsAQ = (v || "").toLowerCase().trim(); hsArchRefresh(); }
+function hsArchDate(which, v) { if (which === "from") window.hsAFrom = v; else window.hsATo = v; hsArchRefresh(); }
+function hsArchSection(H) {
+  const cats = [["all", "Все"], ["labs", HS_CATS.labs.t], ["imaging", HS_CATS.imaging.t], ["consult", HS_CATS.consult.t]];
+  const chips = cats.map(([k, t]) => { const n = k === "all" ? (H.archive || []).length : (H.archive || []).filter((x) => x.cat === k).length; const on = (window.hsAF || "all") === k; return `<b onclick="hsSetAF('${k}')" style="cursor:pointer;padding:5px 10px;border-radius:14px;font-size:12px;white-space:nowrap;border:1px solid ${on ? "var(--red)" : "var(--line)"};color:${on ? "#fff" : "var(--muted)"};background:${on ? "var(--red)" : "transparent"}">${t} ${n}</b>`; }).join("");
+  return `<div class="row spread" style="margin-top:16px"><div class="sec-title">📁 Медицинский архив</div><button onclick="hsAddDoc()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ Добавить документ</button></div>
+    <div class="lbl" style="padding:0 2px 6px">Загрузите фото или PDF — ИИ сам определит тип (анализ / аппаратная диагностика / консультация), дату и название. Можно поправить.</div>
+    <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">${chips}</div>
+    <input id="hs_arch_q" oninput="hsArchQInput(this.value)" value="${esc(window.hsAQ || "")}" placeholder="🔍 поиск по названию, врачу, тексту" style="width:100%;margin-bottom:6px">
+    <div class="row" style="gap:6px;margin-bottom:8px"><input type="date" value="${window.hsAFrom || ""}" onchange="hsArchDate('from',this.value)" style="flex:1" title="с даты"><input type="date" value="${window.hsATo || ""}" onchange="hsArchDate('to',this.value)" style="flex:1" title="по дату"></div>
+    <div id="hs_arch_list">${hsArchItems(H)}</div>`;
+}
+/* --- загрузка документа с ИИ-автосортировкой --- */
+function hsAddDoc() {
+  _pickFile(async (f) => {
+    el("create").innerHTML = `<div class="sheet"><h3>ИИ разбирает документ…</h3><div class="lbl">Определяю тип, дату и содержимое — пара секунд.</div></div>`;
+    el("create").classList.remove("hidden");
+    const isImg = /^image\//.test(f.type || "");
+    const b64 = await _downscaleFile(f, 1800, 0.82);
+    const mime = isImg ? "image/jpeg" : (f.type || "application/pdf");
+    const fname = f.name || ("Документ " + new Date().toLocaleDateString("ru"));
+    let fileMeta = null;
+    try { const up = await API.healthFilePut(fname, mime, b64); if (up && up.ok) fileMeta = { id: up.id, name: up.name, date: up.date, mime: up.mime }; else { closeCreate(); toast((up && up.error) || "Файл не сохранён"); return; } }
+    catch (e) { closeCreate(); toast("Файл не сохранён"); return; }
+    let d = {}; try { const r = await API.vision(b64, mime, "meddoc"); if (r && r.ok && r.text) d = JSON.parse(r.text.replace(/```json|```/g, "").trim()); } catch (e) {}
+    hsDocConfirm(fileMeta, d);
+  });
+}
+function hsCatChips(containerId, cur) {
+  return `<div id="${containerId}" class="row" style="gap:6px;flex-wrap:wrap">${["labs", "imaging", "consult"].map((k) => `<b data-k="${k}" onclick="hsPickCat(this)" style="cursor:pointer;padding:6px 11px;border-radius:12px;font-size:13px;border:1px solid ${k === cur ? "var(--red)" : "var(--line)"};color:${k === cur ? "#fff" : "var(--muted)"};background:${k === cur ? "var(--red)" : "transparent"}">${hsCat(k).t}</b>`).join("")}</div>`;
+}
+function hsPickCat(b) { b.parentNode.querySelectorAll("b").forEach((x) => { x.classList.remove("on"); x.style.background = "transparent"; x.style.color = "var(--muted)"; x.style.borderColor = "var(--line)"; }); b.classList.add("on"); b.style.background = "var(--red)"; b.style.color = "#fff"; b.style.borderColor = "var(--red)"; }
+function hsDocConfirm(fileMeta, d) {
+  const cat = ["labs", "imaging", "consult"].includes(d.category) ? d.category : "consult";
+  const date = d.date || new Date().toISOString().slice(0, 10);
+  const title = d.title || (fileMeta && fileMeta.name) || "Документ";
+  const tests = Array.isArray(d.tests) ? d.tests : [];
+  window._hsDoc = { fileMeta, tests };
+  el("create").innerHTML = `<div class="sheet" style="max-height:86vh;overflow:auto"><h3>Документ в архив</h3>
+    <div class="lbl" style="margin-bottom:4px">Категория (ИИ определил — проверьте)</div>
+    ${hsCatChips("dc_cat", cat)}
+    <div class="lbl" style="margin:10px 0 4px">Дата</div><input type="date" id="dc_date" value="${date}" style="width:100%">
+    <div class="lbl" style="margin:10px 0 4px">Название</div><input id="dc_title" value="${esc(title)}" style="width:100%">
+    <div class="lbl" style="margin:10px 0 4px">Врач / учреждение (необязательно)</div><input id="dc_prov" value="${esc(d.provider || "")}" style="width:100%">
+    <div class="lbl" style="margin:10px 0 4px">Конспект (ИИ)</div><textarea id="dc_text" style="width:100%;min-height:120px">${esc(d.summary || "")}</textarea>
+    ${tests.length ? `<div class="lbl" style="margin-top:8px;color:var(--red)">Распознано показателей: ${tests.length} — добавятся в «Анализы» и графики.</div>` : ""}
+    <button class="btn red" style="margin-top:12px" onclick="hsSaveDoc()">Сохранить в архив</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Отмена</button></div>`;
+  el("create").classList.remove("hidden");
+  const on = document.querySelector('#dc_cat b[data-k="' + cat + '"]'); if (on) hsPickCat(on);
+}
+function hsSaveDoc() {
+  const H = hsArchList(); const sel = document.querySelector("#dc_cat b.on");
+  const cat = sel ? sel.dataset.k : "consult";
+  const fileMeta = (window._hsDoc || {}).fileMeta; const tests = (window._hsDoc || {}).tests || [];
+  const entry = { id: hsUID("arc"), cat, date: el("dc_date").value, title: (el("dc_title").value || "Документ").trim(), provider: (el("dc_prov").value || "").trim(), fileId: fileMeta ? fileMeta.id : "", text: (el("dc_text").value || "").trim() };
+  H.archive = H.archive || []; H.archive.push(entry);
+  if (fileMeta && !(H.files || []).some((x) => x.id === fileMeta.id)) { H.files = H.files || []; H.files.push(fileMeta); }
+  let added = 0;
+  if (cat === "labs" && tests.length) { H.results = H.results || []; tests.forEach((t) => { if (t && t.marker && t.value != null && t.value !== "") { H.results.push({ id: hsUID("res"), marker: String(t.marker), value: Number(t.value), unit: t.unit || "", refMin: (t.ref_min == null ? "" : Number(t.ref_min)), refMax: (t.ref_max == null ? "" : Number(t.ref_max)), date: entry.date, testType: entry.title, source: "photo", fileId: entry.fileId }); added++; } }); }
+  hsSave(H); closeCreate(); toast("В архиве ✓" + (added ? " · показателей: " + added : "")); hsOfferReport();
+}
+function hsEditDoc(id) {
+  const H = hsArchList(); const x = (H.archive || []).find((a) => a.id === id); if (!x) return;
+  el("create").innerHTML = `<div class="sheet" style="max-height:86vh;overflow:auto"><h3>Документ архива</h3>
+    <div class="lbl" style="margin-bottom:4px">Категория</div>${hsCatChips("de_cat", x.cat)}
+    <div class="lbl" style="margin:10px 0 4px">Дата</div><input type="date" id="de_date" value="${x.date}" style="width:100%">
+    <div class="lbl" style="margin:10px 0 4px">Название</div><input id="de_title" value="${esc(x.title)}" style="width:100%">
+    <div class="lbl" style="margin:10px 0 4px">Врач / учреждение</div><input id="de_prov" value="${esc(x.provider || "")}" style="width:100%">
+    <div class="lbl" style="margin:10px 0 4px">Конспект</div><textarea id="de_text" style="width:100%;min-height:110px">${esc(x.text || "")}</textarea>
+    ${x.fileId ? `<button class="btn ghost" style="margin-top:10px" onclick="hsOpenFile('${x.fileId}')"><i class="ti ti-eye" style="margin-right:6px"></i>Открыть файл</button>` : ""}
+    <button class="btn red" style="margin-top:10px" onclick="hsSaveEditDoc('${id}')">Сохранить</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="hsArchDel('${id}')"><i class="ti ti-trash" style="margin-right:6px"></i>Удалить из архива</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="closeCreate();RENDER.health()">Закрыть</button></div>`;
+  el("create").classList.remove("hidden");
+  const on = document.querySelector('#de_cat b[data-k="' + x.cat + '"]'); if (on) hsPickCat(on);
+}
+function hsSaveEditDoc(id) {
+  const H = hsArchList(); const x = (H.archive || []).find((a) => a.id === id); if (!x) return;
+  const sel = document.querySelector("#de_cat b.on"); if (sel) x.cat = sel.dataset.k;
+  x.date = el("de_date").value; x.title = (el("de_title").value || "").trim() || x.title; x.provider = (el("de_prov").value || "").trim(); x.text = (el("de_text").value || "").trim();
+  hsSave(H); closeCreate(); RENDER.health(); toast("Сохранено ✓");
+}
+function hsArchDel(id) {
+  if (!confirm("Удалить документ из архива? Файл тоже удалится.")) return;
+  const H = hsArchList(); const x = (H.archive || []).find((a) => a.id === id);
+  H.archive = (H.archive || []).filter((a) => a.id !== id);
+  if (x && x.fileId) { H.files = (H.files || []).filter((f) => f.id !== x.fileId); try { API.healthFileDelete(x.fileId); } catch (e) {} }
+  hsSave(H); closeCreate(); RENDER.health(); toast("Удалено");
+}
+
 /* ---- экран «Здоровье» ---- */
 RENDER.health = function () {
+  hsMigrateArchive();
   const H = hsLoad();
   const idx = hsIndex(), nx = hsNext(), att = hsAttention(), active = hsActive(), lu = hsLastUpload();
   const back = `<div class="link" onclick="show('home')" style="margin:8px 0;cursor:pointer">‹ На главную</div>`;
@@ -1690,8 +1827,6 @@ RENDER.health = function () {
     const s = hsStatus(r), col = (s === "выше" || s === "ниже") ? "var(--red)" : s === "в диапазоне" ? "#1F9D55" : "#9ca3af";
     return `<div class="li"><div class="t"><div style="font-weight:600">${esc(r.marker)} — ${r.value} ${esc(r.unit || "")}</div><div class="m">${hsFmtD(r.date)} · ${esc(r.testType || "—")} · ${esc(hsRefText(r))}</div></div><span class="badge" style="color:${col};border-color:${col}">${s}</span></div>`;
   }).join("")}</div>` : `<div class="lbl" style="padding:6px 2px 4px">Результатов пока нет — добавьте первый показатель.</div>`;
-
-  const fileList = H.files.length ? `<div class="card" style="padding:6px 16px">${H.files.slice().reverse().map((f) => `<div class="li"><i class="ti ti-file-text" style="color:var(--red)"></i><div class="t" style="cursor:pointer" onclick="hsOpenFile('${f.id}')"><div style="font-weight:500">${esc(f.name)}</div><div class="m">${hsFmtD(f.date)} · нажми, чтобы открыть</div></div><button onclick="hsOpenFile('${f.id}')" title="Открыть" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:var(--red);cursor:pointer"><i class="ti ti-eye"></i></button><button onclick="hsDeleteFile('${f.id}')" title="Удалить" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:#c0392b;cursor:pointer;margin-left:4px"><i class="ti ti-trash"></i></button></div>`).join("")}</div>` : "";
 
   const allMarkers = Array.from(new Set([...HS_MARKERS, ...H.results.map((r) => r.marker)])).filter(Boolean);
   const dyn = allMarkers.map((m) => {
@@ -1726,12 +1861,9 @@ RENDER.health = function () {
     ${remCards}
     <div class="row spread" style="margin-top:14px"><div class="sec-title">Результаты анализов</div><button onclick="hsAddResult()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ показатель</button></div>
     ${resList}
-    <button class="btn red" style="margin-top:10px" onclick="hsScanResults()"><i class="ti ti-camera" style="margin-right:6px"></i>Фото/скан анализов — ИИ распознает</button>
-    <div class="lbl" style="padding:4px 2px 0">Сфотографируй бланк или загрузи PDF — ИИ вытащит показатели, ты проверишь и сохранишь. Сам файл сохранится на сервере.</div>
-    ${fileList}
-    <div class="row spread" style="margin-top:16px"><div class="sec-title">Заключения врачей</div><button onclick="hsAddConclusion()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ текстом</button></div>
-    ${(function(){ const cc = (H.conclusions || []).slice().sort((a, b) => a.date < b.date ? 1 : -1); return cc.length ? `<div class="card" style="padding:6px 16px">${cc.map((c) => `<div class="li"><i class="ti ti-notes" style="color:var(--red)"></i><div class="t"><div style="font-weight:500">${hsFmtD(c.date)}</div><div class="m" style="white-space:pre-wrap">${esc(c.text.length > 220 ? c.text.slice(0,220) + "…" : c.text)}</div></div><button onclick="hsDeleteConclusion('${c.id}')" title="Удалить" style="border:1px solid var(--line);background:var(--card);border-radius:10px;padding:6px 9px;color:#c0392b;cursor:pointer"><i class="ti ti-trash"></i></button></div>`).join("")}</div>` : `<div class="lbl" style="padding:2px 2px 0">Заключений пока нет.</div>`; })()}
-    <button class="btn ghost" style="margin-top:10px" onclick="hsScanConclusion()"><i class="ti ti-file-text" style="margin-right:6px"></i>Заключение врача — фото/скан</button>
+    <button class="btn red" style="margin-top:10px" onclick="hsScanResults()"><i class="ti ti-camera" style="margin-right:6px"></i>Фото/скан анализов — ИИ распознает показатели</button>
+    <div class="lbl" style="padding:4px 2px 0">Сфотографируй бланк или загрузи PDF — ИИ вытащит показатели в графики, ты проверишь. Файл попадёт в архив (раздел «Анализы»).</div>
+    ${hsArchSection(H)}
     <div class="sec-title" style="margin-top:16px">Динамика показателей</div>
     <div class="lbl" style="padding:0 2px 4px">Нажми на показатель — откроется график с зоной нормы и всеми измерениями.</div>
     <div class="card" style="padding:6px 16px">${dyn}</div>
@@ -1890,6 +2022,7 @@ function hsSaveExtract(n) {
     added++;
   }
   if (E.file && !(H.files || []).some((f) => f.id === E.file.id)) H.files.push(E.file);
+  if (E.file) { H.archive = H.archive || []; if (!H.archive.some((a) => a.fileId === E.file.id)) H.archive.push({ id: hsUID("arc"), cat: "labs", date, title: E.file.name || "Анализы", provider: "", fileId: E.file.id, text: "" }); }
   hsSave(H); closeCreate(); toast(added ? ("Добавлено показателей: " + added) : "Ничего не выбрано");
   if (added) hsOfferReport(); else RENDER.health();
 }

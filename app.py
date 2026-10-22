@@ -877,16 +877,27 @@ def _load_payroll():
     for v in vs:
         for r in v.get("rows", []):
             r["amount"] = int(r.get("amount", 0) or 0)
+        # слот = тип дня выплаты (10 или 24): у 10-х и 24-х — свои независимые ленты версий
+        if "slot" not in v:
+            fr = v.get("from", "")
+            v["slot"] = fr[8:10] if len(fr) >= 10 else ""
     vs.sort(key=lambda v: v.get("from", ""))
     data["versions"] = vs
     return data
 
 
+def _slot_of(date):
+    return date[8:10] if date and len(date) >= 10 else ""
+
+
 def _eff_version(data, date):
-    """Версия, действующая на дату: последняя с from <= date."""
+    """Версия, действующая на дату: последняя с from <= date в ленте того же дня (10/24).
+       Старые версии без слота (slot == '') считаются общей базой и подходят любому дню."""
+    slot = _slot_of(date)
     eff = None
     for v in data["versions"]:
-        if v.get("from", "") <= date:
+        vs = v.get("slot", "")
+        if (vs == "" or vs == slot) and v.get("from", "") <= date:
             eff = v
     return eff
 
@@ -906,11 +917,12 @@ def payroll_roster(b: RosterOp, user=Depends(require_owner)):
     date = (b.date or "").strip()
     if not date:
         return {"ok": False, "reason": "no date"}
-    # найти/создать версию-точку ровно на эту дату, склонировав действующую на неё
-    ver = next((v for v in data["versions"] if v.get("from") == date), None)
+    # найти/создать версию-точку ровно на эту дату В СВОЕЙ ленте (10 или 24), склонировав действующую на неё
+    slot = _slot_of(date)
+    ver = next((v for v in data["versions"] if v.get("from") == date and v.get("slot", "") == slot), None)
     if ver is None:
         base = _eff_version(data, date)
-        ver = {"from": date, "rows": [dict(r) for r in (base.get("rows", []) if base else [])]}
+        ver = {"from": date, "slot": slot, "rows": [dict(r) for r in (base.get("rows", []) if base else [])]}
         data["versions"].append(ver)
     rows = ver["rows"]
     if b.action == "add":

@@ -120,7 +120,7 @@ function show(s) {
 }
 
 /* ---------- renderers ---------- */
-const APP_VERSION = "v72";
+const APP_VERSION = "v73";
 const RENDER = {
   async home() {
     const H = await API.home(profile).catch(() => ({ agenda: [], deadlines: [], tasks: [] }));
@@ -191,7 +191,7 @@ const RENDER = {
           ${roster.length ? `<div class="row spread" style="padding:9px 2px;border-top:1px solid var(--line)"><span style="font-weight:700">Итого выдано / план</span><span style="font-weight:800;white-space:nowrap">${money(paidSum)} / ${money(total)}</span></div>` : ""}
           <div style="padding:8px 0"><button onclick="payAdd()" style="background:none;border:none;color:var(--red);font-weight:600;cursor:pointer">＋ сотрудник</button></div>
         </div>
-        <div class="lbl" style="padding:4px 4px 0">Цифры тиражируются на все будущие периоды. Правка на эту дату меняет её и последующие — прошлые остаются как были.</div>`;
+        <div class="lbl" style="padding:4px 4px 0">10-е и 24-е ведутся раздельно. Цифры тиражируются на будущие ${dnum}-е числа; правка меняет это число и последующие ${dnum}-е, прошлые остаются как были.</div>`;
     }
     const ic = (k) => k === "rem" ? "ti-bell" : "ti-clock";
     const [Y, M] = viewYM.split("-").map(Number);
